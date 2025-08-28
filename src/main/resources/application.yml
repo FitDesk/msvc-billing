@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: msvc-billing
+
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /
+    url: /v3/api-docs
+    enabled: true
+  show-actuator: true
+  use-management-port: true
+logging:
+  level:
+    org.springframework.security: TRACE
+    org.springframework.web: DEBUG
+    org.springframework.boot.autoconfigure.security: DEBUG
+    org.springframework.web.cloud.openfeign: DEBUG
+    org.springframework.web.client.RestTemplate: DEBUG
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  endpoint:
+    health:
+      show-details: always
+  prometheus:
+    metrics:
+      export:
+        enabled: true
