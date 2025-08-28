@@ -1,0 +1,23 @@
+target/
+!target/*.jar
+# .mvn/
+# mvnw
+# mvnw.cmd
+
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+.git/
+.gitignore
+
+logs/
+*.log
+
+*-local.properties
+*-dev.properties
+
+README.md
