@@ -1,6 +1,5 @@
 FROM openjdk:21-jdk-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y curl
 COPY pom.xml .
 COPY mvnw .
 COPY .mvn .mvn
