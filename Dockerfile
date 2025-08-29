@@ -1,18 +1,12 @@
-FROM openjdk:21-jdk-slim AS build
+FROM maven:3.9-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY . .
+RUN mvn clean package -DskipTests
 
-WORKDIR /app
-COPY pom.xml .
-COPY mvnw .
-COPY .mvn .mvn
-COPY src ./src
-
-RUN chmod +x mvnw
-RUN ./mvnw clean package -DskipTests
-
-FROM openjdk:21-jre-slim
-
-WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
+FROM eclipse-temurin:21-jre-alpine
+VOLUME /tmp
+RUN apk add --no-cache curl
+COPY --from=build /workspace/target/*.jar app.jar
 
 EXPOSE 9093
 
