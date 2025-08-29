@@ -22,6 +22,6 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-gateway:latest
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-gateway:buildcache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-gateway:buildcache,mode=max
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-msvc-billing:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-msvc-billing:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-msvc-billing:buildcache,mode=max
