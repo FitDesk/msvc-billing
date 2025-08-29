@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: msvc-billing
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /
+    url: /v3/api-docs
