@@ -26,26 +26,13 @@ import io.swagger.v3.oas.annotations.servers.Server;
         servers = {
                 @Server(
                         description = "Local Server",
-                        url = "http://localhost:9002"
+                        url = "http://localhost:9093"
                 ),
                 @Server(
                         description = "Production Server",
                         url = "https://"
                 )
         }
-//        ,
-//        security = @SecurityRequirement(
-//                name = "securityToken"
-//        )
-//)
-//@SecurityScheme(
-//        name = "securityToken",
-//        description = "Access Token For My API",
-//        type = SecuritySchemeType.HTTP,
-//        paramName = HttpHeaders.AUTHORIZATION,
-//        in = SecuritySchemeIn.HEADER,
-//        scheme = "bearer",
-//        bearerFormat = "JWT"
 )
 public class SwaggerConfig {
 }
