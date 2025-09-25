@@ -7,6 +7,6 @@ import org.springframework.web.bind.annotation.RestController;
 public class HelloController {
     @GetMapping("/saludo")
     public String saludo() {
-        return "Hola Microservicio Billing";
+        return "Hola Microservicio Billing testing";
     }
 }

@@ -1,10 +1,9 @@
 FROM openjdk:21-jdk-slim
 WORKDIR /app
-COPY pom.xml .
-COPY mvnw .
 COPY .mvn .mvn
-RUN chmod +x mvnw
-RUN ./mvnw dependency:go-offline
+COPY mvnw pom.xml ./
+RUN ./mvnw -T 4 dependency:go-offline
 COPY src ./src
-EXPOSE 9093 5005
-CMD ["./mvnw", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"]
+EXPOSE 9097 5005
+# CMD ["./mvnw", "spring-boot:run", "-Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"]
+CMD sh -c "chmod +x /app/mvnw && exec /app/mvnw -q spring-boot:run -Dspring-boot.run.jvmArguments=-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
