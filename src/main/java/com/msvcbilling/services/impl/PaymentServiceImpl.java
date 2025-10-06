@@ -36,76 +36,105 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     @Override
     public PaymentResponse processDirectPayment(DirectPaymentRequest request) throws Exception {
-        log.info("Procesando pago directo para referencia: {}", request.externalReference());
+        log.info("🔄 Procesando pago directo para referencia: {}", request.externalReference());
 
         // Verificar idempotencia
         Optional<PaymentEntity> existing = paymentRepository.findByExternalReference(request.externalReference());
         if (existing.isPresent()) {
             PaymentEntity existingPayment = existing.get();
-            log.info("Pago ya existe, retornando existente: {}", existingPayment.getPaymentId());
+            log.info("♻️ Pago ya existe, retornando existente: {}", existingPayment.getPaymentId());
             return paymentMapper.entityToResponse(existingPayment);
         }
 
-        IdentificationRequest identification = IdentificationRequest.builder()
-                .type(request.identificationType())
-                .number(request.identificationNumber())
-                .build();
+        try {
+            // Log de datos que enviamos (sin datos sensibles)
+            log.info("💳 Creando pago - Monto: {}, Email: {}, Método: {}",
+                    request.amount(), request.payerEmail(), request.paymentMethodId());
 
-        PaymentPayerRequest payer = PaymentPayerRequest.builder()
-                .email(request.payerEmail())
-                .firstName(request.payerFirstName())
-                .lastName(request.payerLastName())
-                .identification(identification)
-                .build();
+            IdentificationRequest identification = IdentificationRequest.builder()
+                    .type(request.identificationType())
+                    .number(request.identificationNumber())
+                    .build();
 
-        PaymentCreateRequest paymentRequest = PaymentCreateRequest.builder()
-                .transactionAmount(request.amount())
-                .token(request.token()) // ✅ Token viene del frontend
-                .description(request.description() != null ? request.description() : "Pago FitDesk")
-                .installments(request.installments())
-                .paymentMethodId(request.paymentMethodId())
-                .externalReference(request.externalReference())
-                .payer(payer)
-                .build();
+            PaymentPayerRequest payer = PaymentPayerRequest.builder()
+                    .email(request.payerEmail())
+                    .firstName(request.payerFirstName())
+                    .lastName(request.payerLastName())
+                    .identification(identification)
+                    .build();
 
-        Map<String, String> headers = new HashMap<>();
-        headers.put("x-idempotency-key", UUID.randomUUID().toString());
-        MPRequestOptions options = MPRequestOptions.builder()
-                .customHeaders(headers)
-                .build();
+            PaymentCreateRequest paymentRequest = PaymentCreateRequest.builder()
+                    .transactionAmount(request.amount())
+                    .token(request.token())
+                    .description(request.description() != null ? request.description() : "Pago FitDesk")
+                    .installments(request.installments())
+                    .paymentMethodId(request.paymentMethodId())
+                    .externalReference(request.externalReference())
+                    .payer(payer)
+                    .build();
 
-        Payment payment = paymentClient.create(paymentRequest, options);
+            Map<String, String> headers = new HashMap<>();
+            headers.put("x-idempotency-key", UUID.randomUUID().toString());
+            MPRequestOptions options = MPRequestOptions.builder()
+                    .customHeaders(headers)
+                    .build();
 
-        log.info("Pago creado en Mercado Pago. ID: {}, Status: {}", payment.getId(), payment.getStatus());
+            log.info("🚀 Enviando request a Mercado Pago...");
+            Payment payment = paymentClient.create(paymentRequest, options);
 
-        PaymentEntity paymentEntity = PaymentEntity.builder()
-                .id(UUID.randomUUID())
-                .externalReference(request.externalReference())
-                .paymentId(payment.getId())
-                .token(request.token())
-                .paymentMethodId(payment.getPaymentMethodId())
-                .paymentTypeId(payment.getPaymentTypeId())
-                .installments(payment.getInstallments())
-                .authorizationCode(payment.getAuthorizationCode())
-                .transactionId(payment.getId().toString())
-                .amount(payment.getTransactionAmount())
-                .currencyId(payment.getCurrencyId())
-                .status(payment.getStatus())
-                .statusDetail(payment.getStatusDetail())
-                .payerEmail(request.payerEmail())
-                .payerFirstName(request.payerFirstName())
-                .payerLastName(request.payerLastName())
-                .payerIdentificationType(request.identificationType())
-                .payerIdentificationNumber(request.identificationNumber())
-                .dateCreated(payment.getDateCreated() != null ?
-                        OffsetDateTime.ofInstant(payment.getDateCreated().toInstant(), ZoneOffset.UTC) : OffsetDateTime.now())
-                .dateApproved(payment.getDateApproved() != null ?
-                        OffsetDateTime.ofInstant(payment.getDateApproved().toInstant(), ZoneOffset.UTC) : null)
-                .build();
+            log.info("✅ Pago creado en Mercado Pago. ID: {}, Status: {}", payment.getId(), payment.getStatus());
 
-        paymentRepository.save(paymentEntity);
+            // ... resto del código igual ...
+            PaymentEntity paymentEntity = PaymentEntity.builder()
+                    .id(UUID.randomUUID())
+                    .externalReference(request.externalReference())
+                    .paymentId(payment.getId())
+                    .token(request.token())
+                    .paymentMethodId(payment.getPaymentMethodId())
+                    .paymentTypeId(payment.getPaymentTypeId())
+                    .installments(payment.getInstallments())
+                    .authorizationCode(payment.getAuthorizationCode())
+                    .transactionId(payment.getId().toString())
+                    .amount(payment.getTransactionAmount())
+                    .currencyId(payment.getCurrencyId())
+                    .status(payment.getStatus())
+                    .statusDetail(payment.getStatusDetail())
+                    .payerEmail(request.payerEmail())
+                    .payerFirstName(request.payerFirstName())
+                    .payerLastName(request.payerLastName())
+                    .payerIdentificationType(request.identificationType())
+                    .payerIdentificationNumber(request.identificationNumber())
+                    .dateCreated(payment.getDateCreated() != null ?
+                            OffsetDateTime.ofInstant(payment.getDateCreated().toInstant(), ZoneOffset.UTC) : OffsetDateTime.now())
+                    .dateApproved(payment.getDateApproved() != null ?
+                            OffsetDateTime.ofInstant(payment.getDateApproved().toInstant(), ZoneOffset.UTC) : null)
+                    .build();
 
-        return paymentMapper.entityToResponse(paymentEntity);
+            paymentRepository.save(paymentEntity);
+            return paymentMapper.entityToResponse(paymentEntity);
+
+        } catch (
+                com.mercadopago.exceptions.MPApiException mpEx) {
+            log.error("❌ Error específico de Mercado Pago:");
+            log.error("📄 Status Code: {}", mpEx.getStatusCode());
+            log.error("📄 Message: {}", mpEx.getMessage());
+
+            // Intentar obtener detalles de la respuesta
+            try {
+                if (mpEx.getApiResponse() != null) {
+                    log.error("📄 API Response: {}", mpEx.getApiResponse().getContent());
+                }
+            } catch (
+                    Exception e) {
+                log.warn("No se pudo obtener detalles de la respuesta de MP");
+            }
+
+            throw mpEx;
+        } catch (
+                Exception ex) {
+            log.error("❌ Error general procesando pago: {}", ex.getMessage(), ex);
+            throw ex;
+        }
     }
 
     @Transactional
