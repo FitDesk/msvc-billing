@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
+import java.nio.file.AccessDeniedException;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -107,20 +108,18 @@ public class GlobalExceptionController {
         log.warn("Resource not found: {}", ex.getRequestURL());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
     }
-//
-//    @ExceptionHandler(AccessDeniedException.class)
-//    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException ex) {
-//        ErrorResponse errorResponse = new ErrorResponse(
-//                "ACCESS_DENIED",
-//                "Acceso denegado",
-//                Collections.singletonList("No tienes los permisos necesarios para realizar esta acción")
-//        );
-//
-//        log.warn("Access denied for user");
-//        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
-//    }
-//
 
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorResponse> handleAccessDeniedException(AccessDeniedException ex) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                "ACCESS_DENIED",
+                "Acceso denegado",
+                Collections.singletonList("No tienes los permisos necesarios para realizar esta acción")
+        );
+
+        log.warn("Access denied for user");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
+    }
 
 
 }
