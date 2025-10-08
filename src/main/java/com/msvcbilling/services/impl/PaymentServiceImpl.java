@@ -10,11 +10,13 @@ import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.paymentmethod.PaymentMethod;
 import com.msvcbilling.dtos.*;
 import com.msvcbilling.entities.PaymentEntity;
+import com.msvcbilling.events.PaymentApprovedEvent;
 import com.msvcbilling.mappers.PaymentMapper;
 import com.msvcbilling.repository.PaymentRepository;
 import com.msvcbilling.services.PaymentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -32,6 +34,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentClient paymentClient;
     private final PaymentMethodClient paymentMethodClient;
     private final PaymentMapper paymentMapper;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
 
     @Transactional
     @Override
@@ -87,6 +90,7 @@ public class PaymentServiceImpl implements PaymentService {
             // ... resto del código igual ...
             PaymentEntity paymentEntity = PaymentEntity.builder()
                     .id(UUID.randomUUID())
+                    .userId(request.userId())
                     .externalReference(request.externalReference())
                     .paymentId(payment.getId())
                     .token(request.token())
@@ -111,6 +115,11 @@ public class PaymentServiceImpl implements PaymentService {
                     .build();
 
             paymentRepository.save(paymentEntity);
+
+            if ("approved".equals(payment.getStatus())) {
+                log.info("Enviando mensaje a members {}", paymentEntity);
+                sendPaymentApprovedEvent(paymentEntity, request);
+            }
             return paymentMapper.entityToResponse(paymentEntity);
 
         } catch (
@@ -224,4 +233,28 @@ public class PaymentServiceImpl implements PaymentService {
                     payment.getId(), extRef);
         }
     }
+
+
+    private void sendPaymentApprovedEvent(PaymentEntity payment, DirectPaymentRequest request) {
+        try {
+            PaymentApprovedEvent event = new PaymentApprovedEvent(
+                    payment.getId(),
+                    payment.getUserId(),
+//                    payment.getPlanId(),
+//                    request.planName(), // Añadir al DirectPaymentRequest
+                    payment.getAmount(),
+                    payment.getExternalReference(),
+                    payment.getDateCreated(),
+                    payment.getTransactionId()
+            );
+
+            kafkaTemplate.send("payment-approved-event-topic", event);
+            log.info("📤 Evento de pago aprobado enviado: {}", event);
+        } catch (
+                Exception e) {
+            log.error("❌ Error enviando evento de pago aprobado", e);
+        }
+    }
+
+
 }

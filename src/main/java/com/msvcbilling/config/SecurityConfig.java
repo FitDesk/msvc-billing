@@ -32,8 +32,8 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/saludo",
                                 "/",
-                                "/payments/**",
-                                "/billing/payments/**",
+//                                "/payments/**",
+//                                "/billing/payments/**",
                                 "/error"
                         ).permitAll()
                         .anyRequest().authenticated()
@@ -48,8 +48,8 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/saludo",
                                 "/",
-                                "/payments/**",
-                                "/billing/payments/**",
+//                                "/payments/**",
+//                                "/billing/payments/**",
                                 "/error"
                         )
                 )

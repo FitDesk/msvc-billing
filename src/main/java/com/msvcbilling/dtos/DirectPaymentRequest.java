@@ -6,11 +6,12 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 public record DirectPaymentRequest(
         @NotNull(message = "La referencia externa es requerida")
         String externalReference,
-
+        UUID userId,
         @NotNull(message = "El monto es requerido")
         @DecimalMin(value = "0.01", message = "El monto debe ser mayor a 0")
         BigDecimal amount,

@@ -20,6 +20,13 @@ public class PaymentEntity {
     @Id
     private UUID id;
 
+    @Column(name = "user_id")
+    private UUID userId;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "plan_id", referencedColumnName = "id")
+    private PlanEntity plan;
+
     @Column(name = "external_reference", unique = true)
     private String externalReference;
 
