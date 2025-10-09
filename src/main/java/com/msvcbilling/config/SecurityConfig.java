@@ -32,8 +32,8 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/saludo",
                                 "/",
-//                                "/payments/**",
-//                                "/billing/payments/**",
+                                "/plans/**",
+                                "/billing/plans/**",
                                 "/error"
                         ).permitAll()
                         .anyRequest().authenticated()
@@ -48,9 +48,9 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/saludo",
                                 "/",
-//                                "/payments/**",
-//                                "/billing/payments/**",
-                                "/error"
+                                "/error",
+                                "/billing/plans/**",
+                                "/plans/**"
                         )
                 )
                 .build();

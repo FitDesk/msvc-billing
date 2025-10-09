@@ -11,7 +11,12 @@ import java.util.UUID;
 public record DirectPaymentRequest(
         @NotNull(message = "La referencia externa es requerida")
         String externalReference,
+        @NotNull(message = "El ID del usuario es requerido")
         UUID userId,
+
+        @NotNull(message = "El ID del plan es requerido")
+        UUID planId,
+
         @NotNull(message = "El monto es requerido")
         @DecimalMin(value = "0.01", message = "El monto debe ser mayor a 0")
         BigDecimal amount,
@@ -20,10 +25,7 @@ public record DirectPaymentRequest(
         @Email(message = "Email inválido")
         String payerEmail,
 
-        @NotBlank(message = "El nombre del pagador es requerido")
         String payerFirstName,
-
-        @NotBlank(message = "El apellido del pagador es requerido")
         String payerLastName,
 
         String description,
@@ -42,4 +44,5 @@ public record DirectPaymentRequest(
 
         @NotBlank(message = "El número de documento es requerido")
         String identificationNumber
-) {}
+) {
+}

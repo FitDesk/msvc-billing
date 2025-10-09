@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/billing/payments")
+@RequestMapping("/payments")
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Payments", description = "API para pagos directos con Mercado Pago")

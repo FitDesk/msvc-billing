@@ -121,5 +121,28 @@ public class GlobalExceptionController {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(errorResponse);
     }
 
+    @ExceptionHandler(PlanNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handlePlanNotFoundException(PlanNotFoundException ex) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                "PLAN_ERROR",
+                "No se pudo encontrar el plan",
+                Collections.singletonList(ex.getMessage())
+        );
+
+        log.warn("Plan no encontrado: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
+    }
+
+    @ExceptionHandler(PlanNotActiveException.class)
+    public ResponseEntity<ErrorResponse> handlePlanNotActiveException(PlanNotActiveException ex) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                "PLAN_NOT_ACTIVE",
+                "El plan no está activo",
+                Collections.singletonList(ex.getMessage())
+        );
+
+        log.warn("Plan no activo: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
 
 }

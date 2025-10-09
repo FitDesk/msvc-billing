@@ -10,9 +10,13 @@ import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.paymentmethod.PaymentMethod;
 import com.msvcbilling.dtos.*;
 import com.msvcbilling.entities.PaymentEntity;
+import com.msvcbilling.entities.PlanEntity;
 import com.msvcbilling.events.PaymentApprovedEvent;
+import com.msvcbilling.exceptions.PlanNotActiveException;
+import com.msvcbilling.exceptions.PlanNotFoundException;
 import com.msvcbilling.mappers.PaymentMapper;
 import com.msvcbilling.repository.PaymentRepository;
+import com.msvcbilling.repository.PlanRepository;
 import com.msvcbilling.services.PaymentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +35,7 @@ import java.util.stream.Collectors;
 public class PaymentServiceImpl implements PaymentService {
 
     private final PaymentRepository paymentRepository;
+    private final PlanRepository planRepository;
     private final PaymentClient paymentClient;
     private final PaymentMethodClient paymentMethodClient;
     private final PaymentMapper paymentMapper;
@@ -41,7 +46,16 @@ public class PaymentServiceImpl implements PaymentService {
     public PaymentResponse processDirectPayment(DirectPaymentRequest request) throws Exception {
         log.info("🔄 Procesando pago directo para referencia: {}", request.externalReference());
 
-        // Verificar idempotencia
+        PlanEntity plan = planRepository.findById(request.planId())
+                .orElseThrow(() -> new PlanNotFoundException("Plan no econtrado con ID " + request.planId()));
+
+        if (!plan.getIsActive()) {
+            throw new PlanNotActiveException("El plan selecionado no esta activo");
+        }
+        if (plan.getPrice().compareTo(request.amount()) != 0) {
+            throw new IllegalArgumentException("El monto no coincide con el precio del plan");
+        }
+
         Optional<PaymentEntity> existing = paymentRepository.findByExternalReference(request.externalReference());
         if (existing.isPresent()) {
             PaymentEntity existingPayment = existing.get();
@@ -91,6 +105,7 @@ public class PaymentServiceImpl implements PaymentService {
             PaymentEntity paymentEntity = PaymentEntity.builder()
                     .id(UUID.randomUUID())
                     .userId(request.userId())
+                    .plan(plan)
                     .externalReference(request.externalReference())
                     .paymentId(payment.getId())
                     .token(request.token())
@@ -240,8 +255,9 @@ public class PaymentServiceImpl implements PaymentService {
             PaymentApprovedEvent event = new PaymentApprovedEvent(
                     payment.getId(),
                     payment.getUserId(),
-//                    payment.getPlanId(),
-//                    request.planName(), // Añadir al DirectPaymentRequest
+                    payment.getPlan().getId(),
+                    payment.getPlan().getName(),
+                    payment.getPlan().getDurationMonths(),
                     payment.getAmount(),
                     payment.getExternalReference(),
                     payment.getDateCreated(),
