@@ -255,6 +255,8 @@ public class PaymentServiceImpl implements PaymentService {
             PaymentApprovedEvent event = new PaymentApprovedEvent(
                     payment.getId(),
                     payment.getUserId(),
+                    payment.getPayerEmail(),
+                    payment.getPayerFirstName() + " " + payment.getPayerLastName(),
                     payment.getPlan().getId(),
                     payment.getPlan().getName(),
                     payment.getPlan().getDurationMonths(),

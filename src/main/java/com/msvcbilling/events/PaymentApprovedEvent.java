@@ -8,6 +8,8 @@ import java.util.UUID;
 public record PaymentApprovedEvent(
         UUID paymentId,
         UUID userId,
+        String userEmail,           
+        String userName,            
         UUID planId,
         String planName,
         Integer durationMonths,
