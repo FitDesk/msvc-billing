@@ -1,6 +1,7 @@
 package com.msvcbilling.entities;
 
 import com.msvcbilling.config.audit.Audit;
+import com.msvcbilling.config.audit.AuditListener;
 import jakarta.persistence.*;
 import jakarta.persistence.Id;
 import lombok.*;
@@ -16,6 +17,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EntityListeners(AuditListener.class)
 public class PaymentEntity {
     @Id
     private UUID id;

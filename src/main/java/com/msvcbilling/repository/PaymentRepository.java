@@ -12,5 +12,5 @@ import java.util.UUID;
 public interface PaymentRepository extends JpaRepository<PaymentEntity, UUID> {
     Optional<PaymentEntity> findByExternalReference(String externalReference);
     Optional<PaymentEntity> findByPaymentId(Long paymentId);
-    Optional<PaymentEntity> findByToken(String token);
+    List<PaymentEntity> findByStatus(String status);
 }

@@ -34,7 +34,8 @@ public class SecurityConfig {
                                 "/",
                                 "/plans/**",
                                 "/billing/plans/**",
-                                "/error"
+                                "/error",
+                                "/payments/simulate-approval"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )
@@ -50,7 +51,8 @@ public class SecurityConfig {
                                 "/",
                                 "/error",
                                 "/billing/plans/**",
-                                "/plans/**"
+                                "/plans/**",
+                                "/payments/simulate-approval"
                         )
                 )
                 .build();

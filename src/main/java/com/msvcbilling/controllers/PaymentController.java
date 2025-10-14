@@ -71,7 +71,6 @@ public class PaymentController {
     }
 
 
-
     @Operation(summary = "Verificar estado del servicio")
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {
@@ -84,5 +83,22 @@ public class PaymentController {
     }
 
 
-
+    @PostMapping("/simulate-approval")
+    public ResponseEntity<Map<String, String>> simulatePaymentApproval(
+            @RequestParam String externalReference,
+            @RequestParam String authorizationCode) {
+        try {
+            paymentService.simulatePaymentApproval(externalReference, authorizationCode);
+            return ResponseEntity.ok(Map.of(
+                    "message", "Pago simulado como aprobado",
+                    "externalReference", externalReference,
+                    "authorizationCode", authorizationCode
+            ));
+        } catch (
+                RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", e.getMessage()
+            ));
+        }
+    }
 }

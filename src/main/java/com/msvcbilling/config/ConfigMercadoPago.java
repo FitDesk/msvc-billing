@@ -16,8 +16,8 @@ public class ConfigMercadoPago {
     public void init() {
         log.info("Access Token de mercado pago {}", accessToken);
         MercadoPagoConfig.setAccessToken(accessToken);
-        MercadoPagoConfig.setConnectionRequestTimeout(3000);
-        MercadoPagoConfig.setSocketTimeout(5000);
+        MercadoPagoConfig.setConnectionRequestTimeout(5000);
+        MercadoPagoConfig.setSocketTimeout(10000);
     }
 
 }

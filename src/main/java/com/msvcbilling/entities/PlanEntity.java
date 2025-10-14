@@ -2,6 +2,7 @@ package com.msvcbilling.entities;
 
 
 import com.msvcbilling.config.audit.Audit;
+import com.msvcbilling.config.audit.AuditListener;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -16,6 +17,7 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@EntityListeners(AuditListener.class)
 public class PlanEntity {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)

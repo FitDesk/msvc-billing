@@ -8,14 +8,13 @@ import io.swagger.v3.oas.annotations.servers.Server;
 
 @OpenAPIDefinition(
         info = @Info(
-                title = "",
-                description = "",
-                termsOfService = "",
+                title = "Microservicio para Pagos y Membrecias",
+                description = "API de pagos",
+                termsOfService = "FitDesk",
                 version = "1.0.0",
                 contact = @Contact(
-                        name = "",
-                        url = "",
-                        email = ""
+                        name = "FitDesk",
+                        email = "fitdesk@gmail.com"
                 ),
                 license = @License(
                         name = "Standard Apache License Version 2.0 for Fintech",
@@ -27,10 +26,6 @@ import io.swagger.v3.oas.annotations.servers.Server;
                 @Server(
                         description = "Local Server",
                         url = "http://localhost:9097"
-                ),
-                @Server(
-                        description = "Production Server",
-                        url = "https://"
                 )
         }
 )

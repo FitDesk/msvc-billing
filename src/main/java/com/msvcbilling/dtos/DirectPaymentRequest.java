@@ -45,4 +45,8 @@ public record DirectPaymentRequest(
         @NotBlank(message = "El número de documento es requerido")
         String identificationNumber
 ) {
+    public DirectPaymentRequest {
+        payerFirstName = (payerFirstName == null || payerFirstName.trim().isEmpty()) ? "APOR" : payerFirstName;
+        payerLastName = (payerLastName == null || payerLastName.trim().isEmpty()) ? "APOR" : payerLastName;
+    }
 }

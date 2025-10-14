@@ -88,6 +88,8 @@ public class PaymentServiceImpl implements PaymentService {
                     .paymentMethodId(request.paymentMethodId())
                     .externalReference(request.externalReference())
                     .payer(payer)
+                    .statementDescriptor("FITDESK")
+                    .binaryMode(false)
                     .build();
 
             Map<String, String> headers = new HashMap<>();
@@ -96,12 +98,19 @@ public class PaymentServiceImpl implements PaymentService {
                     .customHeaders(headers)
                     .build();
 
-            log.info("🚀 Enviando request a Mercado Pago...");
+            log.info("Enviando request a Mercado Pago...");
             Payment payment = paymentClient.create(paymentRequest, options);
 
-            log.info("✅ Pago creado en Mercado Pago. ID: {}, Status: {}", payment.getId(), payment.getStatus());
 
-            // ... resto del código igual ...
+            log.info("✅ Pago creado en Mercado Pago. ID: {}, Status: {}, Detail: {}",
+                    payment.getId(),
+                    payment.getStatus(),
+                    payment.getStatusDetail());
+            String authCode = payment.getAuthorizationCode();
+            if (authCode == null || authCode.isEmpty()) {
+                authCode = "PENDING";
+                log.warn("⏳ Pago en proceso. AuthCode será actualizado posteriormente");
+            }
             PaymentEntity paymentEntity = PaymentEntity.builder()
                     .id(UUID.randomUUID())
                     .userId(request.userId())
@@ -112,7 +121,7 @@ public class PaymentServiceImpl implements PaymentService {
                     .paymentMethodId(payment.getPaymentMethodId())
                     .paymentTypeId(payment.getPaymentTypeId())
                     .installments(payment.getInstallments())
-                    .authorizationCode(payment.getAuthorizationCode())
+                    .authorizationCode(authCode)
                     .transactionId(payment.getId().toString())
                     .amount(payment.getTransactionAmount())
                     .currencyId(payment.getCurrencyId())
@@ -132,21 +141,22 @@ public class PaymentServiceImpl implements PaymentService {
             paymentRepository.save(paymentEntity);
 
             if ("approved".equals(payment.getStatus())) {
-                log.info("Enviando mensaje a members {}", paymentEntity);
+                log.info("📤 Enviando evento de pago aprobado");
                 sendPaymentApprovedEvent(paymentEntity, request);
+            } else {
+                log.warn("⏳ Pago en estado: {}. Esperando confirmación", payment.getStatus());
             }
             return paymentMapper.entityToResponse(paymentEntity);
 
         } catch (
                 com.mercadopago.exceptions.MPApiException mpEx) {
-            log.error("❌ Error específico de Mercado Pago:");
-            log.error("📄 Status Code: {}", mpEx.getStatusCode());
-            log.error("📄 Message: {}", mpEx.getMessage());
+            log.error("Error específico de Mercado Pago:");
+            log.error(" Status Code: {}", mpEx.getStatusCode());
+            log.error(" Message: {}", mpEx.getMessage());
 
-            // Intentar obtener detalles de la respuesta
             try {
                 if (mpEx.getApiResponse() != null) {
-                    log.error("📄 API Response: {}", mpEx.getApiResponse().getContent());
+                    log.error("API Response: {}", mpEx.getApiResponse().getContent());
                 }
             } catch (
                     Exception e) {
@@ -156,7 +166,7 @@ public class PaymentServiceImpl implements PaymentService {
             throw mpEx;
         } catch (
                 Exception ex) {
-            log.error("❌ Error general procesando pago: {}", ex.getMessage(), ex);
+            log.error("Error general procesando pago: {}", ex.getMessage(), ex);
             throw ex;
         }
     }
@@ -216,7 +226,7 @@ public class PaymentServiceImpl implements PaymentService {
         if (payment == null)
             return;
 
-        log.info("Actualizando pago desde webhook. Payment ID: {}", payment.getId());
+        log.info("📥 Actualizando pago. Payment ID: {}", payment.getId());
 
         String extRef = payment.getExternalReference();
         String status = payment.getStatus() != null ? payment.getStatus() : "unknown";
@@ -233,22 +243,53 @@ public class PaymentServiceImpl implements PaymentService {
 
         if (localOpt.isPresent()) {
             PaymentEntity local = localOpt.get();
+            String previousStatus = local.getStatus();
+
             local.setStatus(status);
             local.setStatusDetail(payment.getStatusDetail());
-            local.setAuthorizationCode(payment.getAuthorizationCode());
+
+            if (payment.getAuthorizationCode() != null && !payment.getAuthorizationCode().isEmpty()) {
+                local.setAuthorizationCode(payment.getAuthorizationCode());
+                log.info("✅ Authorization Code actualizado: {}", payment.getAuthorizationCode());
+            }
 
             if (payment.getDateApproved() != null && local.getDateApproved() == null) {
                 local.setDateApproved(OffsetDateTime.ofInstant(payment.getDateApproved().toInstant(), ZoneOffset.UTC));
             }
 
             paymentRepository.save(local);
-            log.info("Pago actualizado exitosamente. Nuevo estado: {}", status);
-        } else {
-            log.warn("No se encontró pago local para Payment ID: {} y External Reference: {}",
-                    payment.getId(), extRef);
+            log.info("✅ Pago actualizado: {} -> {}", previousStatus, status);
+
+            if ("approved".equals(status) && !"approved".equals(previousStatus)) {
+                log.info("📤 Pago aprobado, enviando evento a Kafka");
+                sendPaymentApprovedEventFromEntity(local);
+            }
         }
     }
 
+    private void sendPaymentApprovedEventFromEntity(PaymentEntity payment) {
+        try {
+            PaymentApprovedEvent event = new PaymentApprovedEvent(
+                    payment.getId(),
+                    payment.getUserId(),
+                    payment.getPayerEmail(),
+                    payment.getPayerFirstName() + " " + payment.getPayerLastName(),
+                    payment.getPlan().getId(),
+                    payment.getPlan().getName(),
+                    payment.getPlan().getDurationMonths(),
+                    payment.getAmount(),
+                    payment.getExternalReference(),
+                    payment.getDateCreated(),
+                    payment.getTransactionId()
+            );
+
+            kafkaTemplate.send("payment-approved-event-topic", event);
+            log.info("📤 Evento enviado: {}", event);
+        } catch (
+                Exception e) {
+            log.error("❌ Error enviando evento", e);
+        }
+    }
 
     private void sendPaymentApprovedEvent(PaymentEntity payment, DirectPaymentRequest request) {
         try {
@@ -272,6 +313,28 @@ public class PaymentServiceImpl implements PaymentService {
                 Exception e) {
             log.error("❌ Error enviando evento de pago aprobado", e);
         }
+    }
+
+    @Override
+    @Transactional
+    public void simulatePaymentApproval(String externalReference, String authorizationCode) {
+        log.info("🔄 Simulando aprobación de pago para referencia: {}", externalReference);
+
+        Optional<PaymentEntity> paymentOpt = paymentRepository.findByExternalReference(externalReference);
+        if (paymentOpt.isEmpty()) {
+            throw new RuntimeException("Pago no encontrado para la referencia: " + externalReference);
+        }
+
+        PaymentEntity payment = paymentOpt.get();
+        payment.setStatus("approved");
+        payment.setStatusDetail("Simulated approval");
+        payment.setAuthorizationCode(authorizationCode);
+        payment.setDateApproved(OffsetDateTime.now());
+
+        paymentRepository.save(payment);
+
+        log.info("✅ Pago simulado como aprobado. Referencia: {}, Authorization Code: {}", externalReference, authorizationCode);
+        sendPaymentApprovedEventFromEntity(payment);
     }
 
 
