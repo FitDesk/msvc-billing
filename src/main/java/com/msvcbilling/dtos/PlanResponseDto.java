@@ -13,6 +13,7 @@ public record PlanResponseDto(
         String currency,
         Boolean isActive,
         Boolean isPopular,
+        String planImageUrl,
         List<String> features
 ) {
 }
