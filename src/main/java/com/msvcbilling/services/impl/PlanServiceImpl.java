@@ -3,6 +3,7 @@ package com.msvcbilling.services.impl;
 import com.msvcbilling.dtos.CreatePlanRequestDto;
 import com.msvcbilling.dtos.ImageUploadResponseDto;
 import com.msvcbilling.dtos.PlanResponseDto;
+import com.msvcbilling.dtos.UpdatePlanRequestDto;
 import com.msvcbilling.entities.PlanEntity;
 import com.msvcbilling.exceptions.PlanNotFoundException;
 import com.msvcbilling.exceptions.PlansNotFoundException;
@@ -118,7 +119,7 @@ public class PlanServiceImpl implements PlanService {
     @Transactional
     @CircuitBreaker(name = "planService", fallbackMethod = "updatePlanFallback")
     @Retry(name = "databaseRetry")
-    public PlanResponseDto updatePlan(UUID id, CreatePlanRequestDto request, MultipartFile file) {
+    public PlanResponseDto updatePlan(UUID id, UpdatePlanRequestDto request, MultipartFile file) {
         log.info("Actualizando plan con ID: {}", id);
 
         PlanEntity existingPlan = planRepository.findById(id)

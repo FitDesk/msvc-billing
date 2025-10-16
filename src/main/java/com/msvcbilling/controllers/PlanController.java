@@ -5,6 +5,7 @@ import com.msvcbilling.annotations.AdminAccess;
 import com.msvcbilling.dtos.CreatePlanRequestDto;
 import com.msvcbilling.dtos.ImageUploadResponseDto;
 import com.msvcbilling.dtos.PlanResponseDto;
+import com.msvcbilling.dtos.UpdatePlanRequestDto;
 import com.msvcbilling.services.PlanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -48,14 +49,14 @@ public class PlanController {
     }
 
     @Operation(summary = "Crear nuevo plan")
-    @PostMapping
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @AdminAccess
     public ResponseEntity<PlanResponseDto> createPlan(
             @Valid @RequestPart(value = "plan") CreatePlanRequestDto request,
-            @RequestPart(value = "billingImage") MultipartFile file
+            @RequestPart(value = "billingImage" ,required = false) MultipartFile billingImage
     ) {
         log.info("Creando nuevo plan: {}", request.name());
-        PlanResponseDto plan = planService.createPlan(request, file);
+        PlanResponseDto plan = planService.createPlan(request, billingImage);
         return ResponseEntity.status(HttpStatus.CREATED).body(plan);
     }
 
@@ -64,7 +65,7 @@ public class PlanController {
     @AdminAccess
     public ResponseEntity<PlanResponseDto> updatePlan(
             @PathVariable UUID id,
-            @Valid @RequestPart(value = "planReq", required = false) CreatePlanRequestDto planReq,
+            @Valid @RequestPart(value = "planReq", required = false) UpdatePlanRequestDto planReq,
             @RequestPart(value = "billingImage", required = false) MultipartFile billingImage
     ) {
         log.info("Actualizando plan con ID: {}", id);
