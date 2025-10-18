@@ -47,7 +47,7 @@ public class PaymentServiceImpl implements PaymentService {
         log.info("🔄 Procesando pago directo para referencia: {}", request.externalReference());
 
         PlanEntity plan = planRepository.findById(request.planId())
-                .orElseThrow(() -> new PlanNotFoundException("Plan no econtrado con ID " + request.planId()));
+                .orElseThrow(() -> new PlanNotFoundException(request.planId()));
 
         if (!plan.getIsActive()) {
             throw new PlanNotActiveException("El plan selecionado no esta activo");

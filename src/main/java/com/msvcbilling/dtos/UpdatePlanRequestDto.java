@@ -2,10 +2,8 @@ package com.msvcbilling.dtos;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.UUID;
 
-public record PlanResponseDto(
-        UUID id,
+public record UpdatePlanRequestDto(
         String name,
         String description,
         BigDecimal price,
@@ -13,7 +11,6 @@ public record PlanResponseDto(
         String currency,
         Boolean isActive,
         Boolean isPopular,
-        String planImageUrl,
         List<String> features
 ) {
 }

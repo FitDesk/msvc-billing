@@ -6,7 +6,6 @@ import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-//import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -130,6 +129,18 @@ public class GlobalExceptionController {
         );
 
         log.warn("Plan no encontrado: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
+    }
+
+    @ExceptionHandler(PlansNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handlePlansNotFoundException(PlansNotFoundException ex) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                "PLAN_ERROR",
+                "No se pudo traer los planes",
+                Collections.singletonList(ex.getMessage())
+        );
+
+        log.warn("Planes no encontrados: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(errorResponse);
     }
 

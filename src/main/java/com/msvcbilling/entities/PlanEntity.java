@@ -44,6 +44,9 @@ public class PlanEntity {
     @Column(name = "is_popular")
     private Boolean isPopular = false;
 
+    @Column(name = "plan_image_url")
+    private String planImageUrl;
+
     @ElementCollection
     @CollectionTable(name = "plan_features", joinColumns = @JoinColumn(name = "plan_id"))
     @Column(name = "feature")
