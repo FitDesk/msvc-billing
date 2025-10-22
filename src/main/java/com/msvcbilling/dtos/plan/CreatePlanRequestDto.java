@@ -1,4 +1,4 @@
-package com.msvcbilling.dtos;
+package com.msvcbilling.dtos.plan;
 
 import jakarta.validation.constraints.*;
 

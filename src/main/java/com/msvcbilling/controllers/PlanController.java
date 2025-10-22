@@ -2,10 +2,10 @@ package com.msvcbilling.controllers;
 
 
 import com.msvcbilling.annotations.AdminAccess;
-import com.msvcbilling.dtos.CreatePlanRequestDto;
+import com.msvcbilling.dtos.plan.CreatePlanRequestDto;
 import com.msvcbilling.dtos.ImageUploadResponseDto;
-import com.msvcbilling.dtos.PlanResponseDto;
-import com.msvcbilling.dtos.UpdatePlanRequestDto;
+import com.msvcbilling.dtos.plan.PlanResponseDto;
+import com.msvcbilling.dtos.plan.UpdatePlanRequestDto;
 import com.msvcbilling.services.PlanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -53,7 +53,7 @@ public class PlanController {
     @AdminAccess
     public ResponseEntity<PlanResponseDto> createPlan(
             @Valid @RequestPart(value = "plan") CreatePlanRequestDto request,
-            @RequestPart(value = "billingImage" ,required = false) MultipartFile billingImage
+            @RequestPart(value = "billingImage", required = false) MultipartFile billingImage
     ) {
         log.info("Creando nuevo plan: {}", request.name());
         PlanResponseDto plan = planService.createPlan(request, billingImage);

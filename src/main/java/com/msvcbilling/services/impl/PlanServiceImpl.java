@@ -1,9 +1,9 @@
 package com.msvcbilling.services.impl;
 
-import com.msvcbilling.dtos.CreatePlanRequestDto;
+import com.msvcbilling.dtos.plan.CreatePlanRequestDto;
 import com.msvcbilling.dtos.ImageUploadResponseDto;
-import com.msvcbilling.dtos.PlanResponseDto;
-import com.msvcbilling.dtos.UpdatePlanRequestDto;
+import com.msvcbilling.dtos.plan.PlanResponseDto;
+import com.msvcbilling.dtos.plan.UpdatePlanRequestDto;
 import com.msvcbilling.entities.PlanEntity;
 import com.msvcbilling.exceptions.PlanNotFoundException;
 import com.msvcbilling.exceptions.PlansNotFoundException;

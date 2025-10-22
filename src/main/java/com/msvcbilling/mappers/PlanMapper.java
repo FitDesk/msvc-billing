@@ -1,7 +1,7 @@
 package com.msvcbilling.mappers;
 
 import com.msvcbilling.config.MapStructConfig;
-import com.msvcbilling.dtos.PlanResponseDto;
+import com.msvcbilling.dtos.plan.PlanResponseDto;
 import com.msvcbilling.entities.PlanEntity;
 import org.mapstruct.Mapper;
 

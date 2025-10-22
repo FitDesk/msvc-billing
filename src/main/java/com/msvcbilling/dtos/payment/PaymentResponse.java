@@ -1,4 +1,4 @@
-package com.msvcbilling.dtos;
+package com.msvcbilling.dtos.payment;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
