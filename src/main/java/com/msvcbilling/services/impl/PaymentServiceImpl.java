@@ -8,7 +8,14 @@ import com.mercadopago.client.paymentmethod.PaymentMethodClient;
 import com.mercadopago.core.MPRequestOptions;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.paymentmethod.PaymentMethod;
-import com.msvcbilling.dtos.*;
+import com.msvcbilling.dtos.payment.DirectPaymentRequest;
+import com.msvcbilling.dtos.payment.PaymentDetailsResponseDto;
+import com.msvcbilling.dtos.payment.PaymentResponse;
+import com.msvcbilling.dtos.payment.PlanUpgradeRequestDto;
+import com.msvcbilling.dtos.statistics.DashboardStatisticsResponseDto;
+import com.msvcbilling.dtos.statistics.PlanDistributionDto;
+import com.msvcbilling.dtos.statistics.StatisticDataDto;
+import com.msvcbilling.dtos.statistics.StatusDistributionDto;
 import com.msvcbilling.entities.PaymentEntity;
 import com.msvcbilling.entities.PlanEntity;
 import com.msvcbilling.events.PaymentApprovedEvent;
@@ -18,14 +25,22 @@ import com.msvcbilling.mappers.PaymentMapper;
 import com.msvcbilling.repository.PaymentRepository;
 import com.msvcbilling.repository.PlanRepository;
 import com.msvcbilling.services.PaymentService;
+import com.msvcbilling.specification.PaymentSpecification;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -44,7 +59,7 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     @Override
     public PaymentResponse processDirectPayment(DirectPaymentRequest request) throws Exception {
-        log.info("🔄 Procesando pago directo para referencia: {}", request.externalReference());
+        log.info("Procesando pago directo para referencia: {}", request.externalReference());
 
         PlanEntity plan = planRepository.findById(request.planId())
                 .orElseThrow(() -> new PlanNotFoundException(request.planId()));
@@ -64,13 +79,12 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         try {
-            // Log de datos que enviamos (sin datos sensibles)
-            log.info("💳 Creando pago - Monto: {}, Email: {}, Método: {}",
+            log.info(" Creando pago - Monto: {}, Email: {}, Método: {}",
                     request.amount(), request.payerEmail(), request.paymentMethodId());
 
             IdentificationRequest identification = IdentificationRequest.builder()
                     .type(request.identificationType())
-                    .number(request.identificationNumber())
+                    .number(request.identificationNumber())                    
                     .build();
 
             PaymentPayerRequest payer = PaymentPayerRequest.builder()
@@ -102,7 +116,7 @@ public class PaymentServiceImpl implements PaymentService {
             Payment payment = paymentClient.create(paymentRequest, options);
 
 
-            log.info("✅ Pago creado en Mercado Pago. ID: {}, Status: {}, Detail: {}",
+            log.info(" Pago creado en Mercado Pago. ID: {}, Status: {}, Detail: {}",
                     payment.getId(),
                     payment.getStatus(),
                     payment.getStatusDetail());
@@ -141,7 +155,7 @@ public class PaymentServiceImpl implements PaymentService {
             paymentRepository.save(paymentEntity);
 
             if ("approved".equals(payment.getStatus())) {
-                log.info("📤 Enviando evento de pago aprobado");
+                log.info(" Enviando evento de pago aprobado");
                 sendPaymentApprovedEvent(paymentEntity, request);
             } else {
                 log.warn("⏳ Pago en estado: {}. Esperando confirmación", payment.getStatus());
@@ -169,6 +183,84 @@ public class PaymentServiceImpl implements PaymentService {
             log.error("Error general procesando pago: {}", ex.getMessage(), ex);
             throw ex;
         }
+    }
+    @Override
+    @Transactional
+    public PaymentResponse processPlanUpgrade(PlanUpgradeRequestDto request) throws Exception {
+        PlanEntity newPlan = planRepository.findById(request.newPlanId())
+                .orElseThrow(() -> new EntityNotFoundException("El nuevo plan con ID " + request.newPlanId() + " no fue encontrado."));
+
+        PaymentEntity currentPayment = paymentRepository.findFirstByUserIdAndStatusOrderByDateApprovedDesc(request.userId(), "approved")
+                .orElseThrow(() -> new IllegalStateException("El usuario no tiene una suscripción activa para actualizar."));
+
+        PlanEntity currentPlan = currentPayment.getPlan();
+
+        OffsetDateTime expirationDate = currentPayment.getDateApproved().plusMonths(currentPlan.getDurationMonths());
+        long daysRemaining = ChronoUnit.DAYS.between(OffsetDateTime.now(), expirationDate);
+
+        if (daysRemaining <= 0) {
+            throw new IllegalStateException("Tu plan actual ha expirado o está a punto de expirar. Realiza una compra normal.");
+        }
+
+
+        long totalDaysInCurrentPlan = (long) currentPlan.getDurationMonths() * 30;
+        BigDecimal pricePerDay = currentPlan.getPrice().divide(BigDecimal.valueOf(totalDaysInCurrentPlan), 2, RoundingMode.HALF_UP);
+        BigDecimal remainingValue = pricePerDay.multiply(BigDecimal.valueOf(daysRemaining));
+
+
+        BigDecimal amountToCharge = newPlan.getPrice().subtract(remainingValue);
+
+        log.info("Upgrade de plan: Nuevo plan '{}' ({}). Plan actual '{}' ({}). Valor restante: {}. Monto a cobrar: {}",
+                newPlan.getName(), newPlan.getPrice(), currentPlan.getName(), currentPlan.getPrice(), remainingValue, amountToCharge);
+
+
+        if (amountToCharge.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("El cambio de plan no requiere pago (monto: {}). Se procesará como un cambio directo.", amountToCharge);
+
+
+            currentPayment.setStatus("UPGRADED");
+            paymentRepository.save(currentPayment);
+
+
+            PaymentEntity newPaymentEntity = PaymentEntity.builder()
+                    .userId(request.userId())
+                    .plan(newPlan)
+                    .amount(newPlan.getPrice())
+                    .payerEmail(currentPayment.getPayerEmail())
+                    .status("approved")
+                    .statusDetail("Upgrade sin costo")
+                    .dateApproved(OffsetDateTime.now())
+                    .externalReference("UPGRADE-" + UUID.randomUUID())
+                    .build();
+
+            paymentRepository.save(newPaymentEntity);
+
+
+            sendPaymentApprovedEventFromEntity(newPaymentEntity);
+
+            return paymentMapper.entityToResponse(newPaymentEntity);
+        }
+
+        DirectPaymentRequest paymentRequest = new DirectPaymentRequest(
+                "UPGRADE-" + UUID.randomUUID(),
+                request.userId(),
+                request.newPlanId(),
+                amountToCharge,
+                currentPayment.getPayerEmail(),
+                currentPayment.getPayerFirstName(),
+                currentPayment.getPayerLastName(),
+                "Upgrade al plan: " + newPlan.getName(),
+                request.token(),
+                request.installments(),
+                request.paymentMethodId(),
+                request.identificationType(),
+                request.identificationNumber()
+        );
+
+        currentPayment.setStatus("UPGRADED");
+        paymentRepository.save(currentPayment);
+
+        return processDirectPayment(paymentRequest);
     }
 
     @Transactional
@@ -226,7 +318,7 @@ public class PaymentServiceImpl implements PaymentService {
         if (payment == null)
             return;
 
-        log.info("📥 Actualizando pago. Payment ID: {}", payment.getId());
+        log.info(" Actualizando pago. Payment ID: {}", payment.getId());
 
         String extRef = payment.getExternalReference();
         String status = payment.getStatus() != null ? payment.getStatus() : "unknown";
@@ -250,7 +342,7 @@ public class PaymentServiceImpl implements PaymentService {
 
             if (payment.getAuthorizationCode() != null && !payment.getAuthorizationCode().isEmpty()) {
                 local.setAuthorizationCode(payment.getAuthorizationCode());
-                log.info("✅ Authorization Code actualizado: {}", payment.getAuthorizationCode());
+                log.info(" Authorization Code actualizado: {}", payment.getAuthorizationCode());
             }
 
             if (payment.getDateApproved() != null && local.getDateApproved() == null) {
@@ -258,10 +350,10 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             paymentRepository.save(local);
-            log.info("✅ Pago actualizado: {} -> {}", previousStatus, status);
+            log.info("Pago actualizado: {} -> {}", previousStatus, status);
 
             if ("approved".equals(status) && !"approved".equals(previousStatus)) {
-                log.info("📤 Pago aprobado, enviando evento a Kafka");
+                log.info(" Pago aprobado, enviando evento a Kafka");
                 sendPaymentApprovedEventFromEntity(local);
             }
         }
@@ -284,10 +376,10 @@ public class PaymentServiceImpl implements PaymentService {
             );
 
             kafkaTemplate.send("payment-approved-event-topic", event);
-            log.info("📤 Evento enviado: {}", event);
+            log.info(" Evento enviado: {}", event);
         } catch (
                 Exception e) {
-            log.error("❌ Error enviando evento", e);
+            log.error(" Error enviando evento", e);
         }
     }
 
@@ -308,10 +400,10 @@ public class PaymentServiceImpl implements PaymentService {
             );
 
             kafkaTemplate.send("payment-approved-event-topic", event);
-            log.info("📤 Evento de pago aprobado enviado: {}", event);
+            log.info(" Evento de pago aprobado enviado: {}", event);
         } catch (
                 Exception e) {
-            log.error("❌ Error enviando evento de pago aprobado", e);
+            log.error(" Error enviando evento de pago aprobado", e);
         }
     }
 
@@ -333,9 +425,85 @@ public class PaymentServiceImpl implements PaymentService {
 
         paymentRepository.save(payment);
 
-        log.info("✅ Pago simulado como aprobado. Referencia: {}, Authorization Code: {}", externalReference, authorizationCode);
+        log.info("Pago simulado como aprobado. Referencia: {}, Authorization Code: {}", externalReference, authorizationCode);
         sendPaymentApprovedEventFromEntity(payment);
     }
 
+    @Override
+    public Page<PaymentDetailsResponseDto> getAllPaymentsDetails(Pageable pageable, String status, String paymentMethodId, OffsetDateTime startDate, OffsetDateTime endDate) {
+        log.info("Buscando pagos con filtros - Status: {}, Método de Pago: {}, Fecha Inicio: {}, Fecha Fin: {}",
+                status, paymentMethodId, startDate, endDate);
+
+        Specification<PaymentEntity> spec = PaymentSpecification.hasStatus(status)
+                .and(PaymentSpecification.hasPaymentMethod(paymentMethodId))
+                .and(PaymentSpecification.isBetweenDates(startDate, endDate));
+
+        Page<PaymentEntity> paymentsPage = paymentRepository.findAll(spec, pageable);
+
+        log.info("Se encontraron {} pagos en la página {} de {}", paymentsPage.getNumberOfElements(), paymentsPage.getNumber(), paymentsPage.getTotalPages());
+
+        return paymentsPage.map(paymentMapper::toDto);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public DashboardStatisticsResponseDto getDashboardStatistics() {
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+
+        // Rangos de fecha para el mes actual y el anterior
+        OffsetDateTime startOfCurrentMonth = now.withDayOfMonth(1).withHour(0).withMinute(0).withSecond(0).withNano(0);
+        OffsetDateTime endOfCurrentMonth = startOfCurrentMonth.plusMonths(1).minusNanos(1);
+        OffsetDateTime startOfPreviousMonth = startOfCurrentMonth.minusMonths(1);
+        OffsetDateTime endOfPreviousMonth = startOfCurrentMonth.minusNanos(1);
+
+        //  Ingresos Mensuales
+        BigDecimal currentMonthRevenue = paymentRepository.findTotalRevenueBetween(startOfCurrentMonth, endOfCurrentMonth);
+        BigDecimal previousMonthRevenue = paymentRepository.findTotalRevenueBetween(startOfPreviousMonth, endOfPreviousMonth);
+        StatisticDataDto<BigDecimal> revenueStats = createStatisticData(currentMonthRevenue, previousMonthRevenue);
+
+        //  Nuevos Miembros
+        long currentMonthMembers = paymentRepository.countNewMembersBetween(startOfCurrentMonth, endOfCurrentMonth);
+        long previousMonthMembers = paymentRepository.countNewMembersBetween(startOfPreviousMonth, endOfPreviousMonth);
+        StatisticDataDto<Long> memberStats = createStatisticData(currentMonthMembers, previousMonthMembers);
+
+        //  Estadísticas Adicionales
+        long totalApprovedPayments = paymentRepository.countTotalApprovedPayments();
+        List<PlanDistributionDto> topPlans = paymentRepository.findTopPlans();
+        List<StatusDistributionDto> paymentStatusDistribution = paymentRepository.findPaymentStatusDistribution();
+
+        return new DashboardStatisticsResponseDto(
+                revenueStats,
+                memberStats,
+                totalApprovedPayments,
+                topPlans,
+                paymentStatusDistribution
+        );
+    }
+
+
+    private <T extends Number> StatisticDataDto<T> createStatisticData(T currentValue, T previousValue) {
+        double current = currentValue.doubleValue();
+        double previous = previousValue.doubleValue();
+        double percentageChange = calculatePercentageChange(current, previous);
+        String trend = getTrend(percentageChange);
+
+        return new StatisticDataDto<>(currentValue, percentageChange, trend);
+    }
+
+    private double calculatePercentageChange(double current, double previous) {
+        if (previous == 0) {
+            return current > 0 ? 100.0 : 0.0;
+        }
+        double change = ((current - previous) / previous) * 100.0;
+        return BigDecimal.valueOf(change).setScale(2, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    private String getTrend(double percentageChange) {
+        if (percentageChange > 0)
+            return "up";
+        if (percentageChange < 0)
+            return "down";
+        return "neutral";
+    }
 
 }

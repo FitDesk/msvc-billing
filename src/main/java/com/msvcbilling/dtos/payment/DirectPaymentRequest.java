@@ -1,4 +1,4 @@
-package com.msvcbilling.dtos;
+package com.msvcbilling.dtos.payment;
 
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Email;

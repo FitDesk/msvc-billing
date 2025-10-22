@@ -1,9 +1,9 @@
 package com.msvcbilling.services;
 
-import com.msvcbilling.dtos.CreatePlanRequestDto;
+import com.msvcbilling.dtos.plan.CreatePlanRequestDto;
 import com.msvcbilling.dtos.ImageUploadResponseDto;
-import com.msvcbilling.dtos.PlanResponseDto;
-import com.msvcbilling.dtos.UpdatePlanRequestDto;
+import com.msvcbilling.dtos.plan.PlanResponseDto;
+import com.msvcbilling.dtos.plan.UpdatePlanRequestDto;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;

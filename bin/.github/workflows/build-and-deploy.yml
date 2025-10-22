@@ -1,0 +1,44 @@
+name: Build and deploy container app to Azure Web App - msvc-billing
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    # if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        
+        with:
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-msvc-billing:latest
+          file: ./Dockerfile
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: 'production'
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+
+    steps:
+    - name: Deploy to Azure Web App
+      id: deploy-to-webapp
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: 'msvc-billing'
+        slot-name: 'production'
+        publish-profile: ${{ secrets.AzureAppService_PublishProfile_2aca2998230c470c8797646daa22cc2c }}
+        images: "${{ secrets.DOCKERHUB_USERNAME }}/fitdesk-msvc-billing:latest"
