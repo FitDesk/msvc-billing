@@ -35,4 +35,5 @@ public interface PaymentRepository extends JpaRepository<PaymentEntity, UUID>, J
 
     @Query("SELECT COUNT(p) FROM PaymentEntity p WHERE p.status = 'approved'")
     long countTotalApprovedPayments();
+    Optional<PaymentEntity> findFirstByUserIdAndStatusOrderByDateApprovedDesc(UUID userId, String status);
 }

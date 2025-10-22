@@ -4,6 +4,7 @@ import com.msvcbilling.annotations.AdminAccess;
 import com.msvcbilling.dtos.payment.DirectPaymentRequest;
 import com.msvcbilling.dtos.payment.PaymentDetailsResponseDto;
 import com.msvcbilling.dtos.payment.PaymentResponse;
+import com.msvcbilling.dtos.payment.PlanUpgradeRequestDto;
 import com.msvcbilling.dtos.statistics.DashboardStatisticsResponseDto;
 import com.msvcbilling.services.PaymentService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -46,6 +47,22 @@ public class PaymentController {
             log.error("Error procesando pago para referencia: {}", request.externalReference(), e);
             throw new RuntimeException("Error al procesar pago: " + e.getMessage());
 
+        }
+    }
+
+    @Operation(summary = "Actualizar a un nuevo plan (Upgrade)",
+            description = "Calcula el costo prorrateado y procesa el pago por la diferencia para cambiar a un nuevo plan.")
+    @PostMapping("/upgrade-plan")
+    public ResponseEntity<PaymentResponse> upgradePlan(@Valid @RequestBody PlanUpgradeRequestDto request) {
+        try {
+            log.info("Iniciando upgrade de plan para el usuario: {}", request.userId());
+            PaymentResponse response = paymentService.processPlanUpgrade(request);
+            log.info("Upgrade de plan procesado exitosamente. Estado del pago: {}", response.status());
+            return ResponseEntity.ok(response);
+        } catch (
+                Exception e) {
+            log.error("Error en el upgrade de plan para el usuario: {}", request.userId(), e);
+            throw new RuntimeException("Error al procesar el upgrade de plan: " + e.getMessage());
         }
     }
 

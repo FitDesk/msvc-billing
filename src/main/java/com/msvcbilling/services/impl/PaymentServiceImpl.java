@@ -11,6 +11,7 @@ import com.mercadopago.resources.paymentmethod.PaymentMethod;
 import com.msvcbilling.dtos.payment.DirectPaymentRequest;
 import com.msvcbilling.dtos.payment.PaymentDetailsResponseDto;
 import com.msvcbilling.dtos.payment.PaymentResponse;
+import com.msvcbilling.dtos.payment.PlanUpgradeRequestDto;
 import com.msvcbilling.dtos.statistics.DashboardStatisticsResponseDto;
 import com.msvcbilling.dtos.statistics.PlanDistributionDto;
 import com.msvcbilling.dtos.statistics.StatisticDataDto;
@@ -25,6 +26,7 @@ import com.msvcbilling.repository.PaymentRepository;
 import com.msvcbilling.repository.PlanRepository;
 import com.msvcbilling.services.PaymentService;
 import com.msvcbilling.specification.PaymentSpecification;
+import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -38,6 +40,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -180,6 +183,84 @@ public class PaymentServiceImpl implements PaymentService {
             log.error("Error general procesando pago: {}", ex.getMessage(), ex);
             throw ex;
         }
+    }
+    @Override
+    @Transactional
+    public PaymentResponse processPlanUpgrade(PlanUpgradeRequestDto request) throws Exception {
+        PlanEntity newPlan = planRepository.findById(request.newPlanId())
+                .orElseThrow(() -> new EntityNotFoundException("El nuevo plan con ID " + request.newPlanId() + " no fue encontrado."));
+
+        PaymentEntity currentPayment = paymentRepository.findFirstByUserIdAndStatusOrderByDateApprovedDesc(request.userId(), "approved")
+                .orElseThrow(() -> new IllegalStateException("El usuario no tiene una suscripción activa para actualizar."));
+
+        PlanEntity currentPlan = currentPayment.getPlan();
+
+        OffsetDateTime expirationDate = currentPayment.getDateApproved().plusMonths(currentPlan.getDurationMonths());
+        long daysRemaining = ChronoUnit.DAYS.between(OffsetDateTime.now(), expirationDate);
+
+        if (daysRemaining <= 0) {
+            throw new IllegalStateException("Tu plan actual ha expirado o está a punto de expirar. Realiza una compra normal.");
+        }
+
+
+        long totalDaysInCurrentPlan = (long) currentPlan.getDurationMonths() * 30;
+        BigDecimal pricePerDay = currentPlan.getPrice().divide(BigDecimal.valueOf(totalDaysInCurrentPlan), 2, RoundingMode.HALF_UP);
+        BigDecimal remainingValue = pricePerDay.multiply(BigDecimal.valueOf(daysRemaining));
+
+
+        BigDecimal amountToCharge = newPlan.getPrice().subtract(remainingValue);
+
+        log.info("Upgrade de plan: Nuevo plan '{}' ({}). Plan actual '{}' ({}). Valor restante: {}. Monto a cobrar: {}",
+                newPlan.getName(), newPlan.getPrice(), currentPlan.getName(), currentPlan.getPrice(), remainingValue, amountToCharge);
+
+
+        if (amountToCharge.compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("El cambio de plan no requiere pago (monto: {}). Se procesará como un cambio directo.", amountToCharge);
+
+
+            currentPayment.setStatus("UPGRADED");
+            paymentRepository.save(currentPayment);
+
+
+            PaymentEntity newPaymentEntity = PaymentEntity.builder()
+                    .userId(request.userId())
+                    .plan(newPlan)
+                    .amount(newPlan.getPrice())
+                    .payerEmail(currentPayment.getPayerEmail())
+                    .status("approved")
+                    .statusDetail("Upgrade sin costo")
+                    .dateApproved(OffsetDateTime.now())
+                    .externalReference("UPGRADE-" + UUID.randomUUID())
+                    .build();
+
+            paymentRepository.save(newPaymentEntity);
+
+
+            sendPaymentApprovedEventFromEntity(newPaymentEntity);
+
+            return paymentMapper.entityToResponse(newPaymentEntity);
+        }
+
+        DirectPaymentRequest paymentRequest = new DirectPaymentRequest(
+                "UPGRADE-" + UUID.randomUUID(),
+                request.userId(),
+                request.newPlanId(),
+                amountToCharge,
+                currentPayment.getPayerEmail(),
+                currentPayment.getPayerFirstName(),
+                currentPayment.getPayerLastName(),
+                "Upgrade al plan: " + newPlan.getName(),
+                request.token(),
+                request.installments(),
+                request.paymentMethodId(),
+                request.identificationType(),
+                request.identificationNumber()
+        );
+
+        currentPayment.setStatus("UPGRADED");
+        paymentRepository.save(currentPayment);
+
+        return processDirectPayment(paymentRequest);
     }
 
     @Transactional
@@ -398,6 +479,7 @@ public class PaymentServiceImpl implements PaymentService {
                 paymentStatusDistribution
         );
     }
+
 
     private <T extends Number> StatisticDataDto<T> createStatisticData(T currentValue, T previousValue) {
         double current = currentValue.doubleValue();
