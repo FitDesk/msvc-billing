@@ -6,12 +6,11 @@ import com.mercadopago.client.payment.PaymentCreateRequest;
 import com.mercadopago.client.payment.PaymentPayerRequest;
 import com.mercadopago.client.paymentmethod.PaymentMethodClient;
 import com.mercadopago.core.MPRequestOptions;
+import com.mercadopago.exceptions.MPApiException;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.paymentmethod.PaymentMethod;
-import com.msvcbilling.dtos.payment.DirectPaymentRequest;
-import com.msvcbilling.dtos.payment.PaymentDetailsResponseDto;
-import com.msvcbilling.dtos.payment.PaymentResponse;
-import com.msvcbilling.dtos.payment.PlanUpgradeRequestDto;
+import com.msvcbilling.clients.MercadoPagoApiClient;
+import com.msvcbilling.dtos.payment.*;
 import com.msvcbilling.dtos.statistics.DashboardStatisticsResponseDto;
 import com.msvcbilling.dtos.statistics.PlanDistributionDto;
 import com.msvcbilling.dtos.statistics.StatisticDataDto;
@@ -36,6 +35,8 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import static com.msvcbilling.utils.PaymentMethods.*;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
@@ -55,6 +56,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentMethodClient paymentMethodClient;
     private final PaymentMapper paymentMapper;
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final MercadoPagoApiClient mercadoPagoApiClient;
 
     @Transactional
     @Override
@@ -67,14 +69,19 @@ public class PaymentServiceImpl implements PaymentService {
         if (!plan.getIsActive()) {
             throw new PlanNotActiveException("El plan selecionado no esta activo");
         }
-        if (plan.getPrice().compareTo(request.amount()) != 0) {
+        boolean isUpgrade = request.externalReference().startsWith("UPGRADE-");
+        if (!isUpgrade && plan.getPrice().compareTo(request.amount()) != 0) {
             throw new IllegalArgumentException("El monto no coincide con el precio del plan");
         }
 
+        if (isUpgrade) {
+            log.info("💰 Procesando UPGRADE - Monto prorrateado: {}, Plan nuevo: {}",
+                    request.amount(), plan.getName());
+        }
         Optional<PaymentEntity> existing = paymentRepository.findByExternalReference(request.externalReference());
         if (existing.isPresent()) {
             PaymentEntity existingPayment = existing.get();
-            log.info("♻️ Pago ya existe, retornando existente: {}", existingPayment.getPaymentId());
+            log.info(" Pago ya existe, retornando existente: {}", existingPayment.getPaymentId());
             return paymentMapper.entityToResponse(existingPayment);
         }
 
@@ -84,7 +91,7 @@ public class PaymentServiceImpl implements PaymentService {
 
             IdentificationRequest identification = IdentificationRequest.builder()
                     .type(request.identificationType())
-                    .number(request.identificationNumber())                    
+                    .number(request.identificationNumber())
                     .build();
 
             PaymentPayerRequest payer = PaymentPayerRequest.builder()
@@ -123,7 +130,7 @@ public class PaymentServiceImpl implements PaymentService {
             String authCode = payment.getAuthorizationCode();
             if (authCode == null || authCode.isEmpty()) {
                 authCode = "PENDING";
-                log.warn("⏳ Pago en proceso. AuthCode será actualizado posteriormente");
+                log.warn(" Pago en proceso. AuthCode será actualizado posteriormente");
             }
             PaymentEntity paymentEntity = PaymentEntity.builder()
                     .id(UUID.randomUUID())
@@ -158,12 +165,12 @@ public class PaymentServiceImpl implements PaymentService {
                 log.info(" Enviando evento de pago aprobado");
                 sendPaymentApprovedEvent(paymentEntity, request);
             } else {
-                log.warn("⏳ Pago en estado: {}. Esperando confirmación", payment.getStatus());
+                log.warn("Pago en estado: {}. Esperando confirmación", payment.getStatus());
             }
             return paymentMapper.entityToResponse(paymentEntity);
 
         } catch (
-                com.mercadopago.exceptions.MPApiException mpEx) {
+                MPApiException mpEx) {
             log.error("Error específico de Mercado Pago:");
             log.error(" Status Code: {}", mpEx.getStatusCode());
             log.error(" Message: {}", mpEx.getMessage());
@@ -184,84 +191,81 @@ public class PaymentServiceImpl implements PaymentService {
             throw ex;
         }
     }
-    @Override
+
     @Transactional
+    @Override
     public PaymentResponse processPlanUpgrade(PlanUpgradeRequestDto request) throws Exception {
-        PlanEntity newPlan = planRepository.findById(request.newPlanId())
-                .orElseThrow(() -> new EntityNotFoundException("El nuevo plan con ID " + request.newPlanId() + " no fue encontrado."));
-
-        PaymentEntity currentPayment = paymentRepository.findFirstByUserIdAndStatusOrderByDateApprovedDesc(request.userId(), "approved")
-                .orElseThrow(() -> new IllegalStateException("El usuario no tiene una suscripción activa para actualizar."));
-
+        log.info("🔄 Iniciando proceso de upgrade para usuario: {}", request.userId());
+    
+        // 1️⃣ Buscar el pago activo actual
+        PaymentEntity currentPayment = findActivePaymentForUser(request.userId());
         PlanEntity currentPlan = currentPayment.getPlan();
-
-        OffsetDateTime expirationDate = currentPayment.getDateApproved().plusMonths(currentPlan.getDurationMonths());
-        long daysRemaining = ChronoUnit.DAYS.between(OffsetDateTime.now(), expirationDate);
-
-        if (daysRemaining <= 0) {
-            throw new IllegalStateException("Tu plan actual ha expirado o está a punto de expirar. Realiza una compra normal.");
-        }
-
-
-        long totalDaysInCurrentPlan = (long) currentPlan.getDurationMonths() * 30;
-        BigDecimal pricePerDay = currentPlan.getPrice().divide(BigDecimal.valueOf(totalDaysInCurrentPlan), 2, RoundingMode.HALF_UP);
-        BigDecimal remainingValue = pricePerDay.multiply(BigDecimal.valueOf(daysRemaining));
-
-
-        BigDecimal amountToCharge = newPlan.getPrice().subtract(remainingValue);
-
-        log.info("Upgrade de plan: Nuevo plan '{}' ({}). Plan actual '{}' ({}). Valor restante: {}. Monto a cobrar: {}",
-                newPlan.getName(), newPlan.getPrice(), currentPlan.getName(), currentPlan.getPrice(), remainingValue, amountToCharge);
-
-
-        if (amountToCharge.compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("El cambio de plan no requiere pago (monto: {}). Se procesará como un cambio directo.", amountToCharge);
-
-
-            currentPayment.setStatus("UPGRADED");
-            paymentRepository.save(currentPayment);
-
-
-            PaymentEntity newPaymentEntity = PaymentEntity.builder()
-                    .userId(request.userId())
-                    .plan(newPlan)
-                    .amount(newPlan.getPrice())
-                    .payerEmail(currentPayment.getPayerEmail())
-                    .status("approved")
-                    .statusDetail("Upgrade sin costo")
-                    .dateApproved(OffsetDateTime.now())
-                    .externalReference("UPGRADE-" + UUID.randomUUID())
-                    .build();
-
-            paymentRepository.save(newPaymentEntity);
-
-
-            sendPaymentApprovedEventFromEntity(newPaymentEntity);
-
-            return paymentMapper.entityToResponse(newPaymentEntity);
-        }
-
-        DirectPaymentRequest paymentRequest = new DirectPaymentRequest(
-                "UPGRADE-" + UUID.randomUUID(),
-                request.userId(),
-                request.newPlanId(),
-                amountToCharge,
-                currentPayment.getPayerEmail(),
-                currentPayment.getPayerFirstName(),
-                currentPayment.getPayerLastName(),
-                "Upgrade al plan: " + newPlan.getName(),
-                request.token(),
-                request.installments(),
-                request.paymentMethodId(),
-                request.identificationType(),
-                request.identificationNumber()
+        PlanEntity newPlan = findPlanById(request.newPlanId());
+    
+        // 2️⃣ Validaciones
+        validatePlanUpgrade(currentPlan, newPlan);
+        BigDecimal upgradeCost = calculateProratedUpgradeCost(currentPayment, newPlan);
+        validateUpgradeCost(upgradeCost);
+    
+        log.info("💰 Costo de upgrade calculado: {}", upgradeCost);
+    
+        // 3️⃣ Crear el request para el nuevo pago (✅ CON LOS 4 PARÁMETROS)
+        DirectPaymentRequest upgradePaymentRequest = createUpgradePaymentRequest(
+            request,           // 1. PlanUpgradeRequestDto
+            upgradeCost,       // 2. BigDecimal amountToCharge
+            newPlan,           // 3. PlanEntity newPlan
+            currentPayment     // 4. PaymentEntity currentPayment ← Este era el que faltaba
         );
-
-        currentPayment.setStatus("UPGRADED");
-        paymentRepository.save(currentPayment);
-
-        return processDirectPayment(paymentRequest);
+    
+        // 4️⃣ Procesar el nuevo pago
+        PaymentResponse newPaymentResponse = processDirectPayment(upgradePaymentRequest);
+    
+        // 5️⃣ Cancelar el pago anterior SOLO si el nuevo fue aprobado
+        if ("approved".equals(newPaymentResponse.status())) {
+            log.info("✅ Nuevo pago aprobado. Cancelando pago anterior ID: {}", currentPayment.getId());
+            cancelOldSubscriptionAndUpdateState(currentPayment);
+        } else {
+            log.warn("⚠️ Nuevo pago NO aprobado (estado: {}). No se cancela el pago anterior.", 
+                     newPaymentResponse.status());
+        }
+    
+        return newPaymentResponse;
     }
+
+
+
+//    //    @Override
+//    @Transactional
+//    public void processRefund(Long paymentId) {
+//        log.info("Iniciando proceso de devolución para el pago con ID local: {}", paymentId);
+//
+//        Payment payment = paymentRepository.findById(paymentId)
+//                .orElseThrow(() -> new EntityNotFoundException("No se encontró el pago con ID " + paymentId));
+//
+//        if (!"approved".equals(payment.getStatus())) {
+//            throw new IllegalArgumentException("Solo se pueden devolver pagos 'approved'.");
+//        }
+//
+//        Long mercadoPagoPaymentId = payment.getMercadoPagoPaymentId();
+//        if (mercadoPagoPaymentId == null) {
+//            throw new IllegalStateException("No se encontró el ID del pago de Mercado Pago.");
+//        }
+//
+//        try {
+//            // ¡AQUÍ ESTÁ EL CAMBIO! Usamos el cliente Feign para la devolución.
+//            mercadoPagoApiClient.createRefund(mercadoPagoPaymentId);
+//            log.info("Devolución para el pago de MP {} procesada exitosamente vía Feign.", mercadoPagoPaymentId);
+//
+//            payment.setStatus("refunded");
+//            payment.setReason("Devolución procesada a petición.");
+//            paymentRepository.save(payment);
+//
+//        } catch (
+//                Exception e) {
+//            log.error("Error al procesar devolución con Feign para el pago de MP {}. Error: {}", mercadoPagoPaymentId, e.getMessage());
+//            throw new RuntimeException("Fallo al procesar la devolución en Mercado Pago.", e);
+//        }
+//    }
 
     @Transactional
     @Override
@@ -312,7 +316,55 @@ public class PaymentServiceImpl implements PaymentService {
         return Arrays.asList("visa", "master", "amex");
     }
 
+    @Override
+    public UpgradeCostResponse calculateUpgradeCost(UpgradeCostCalculationRequest request) throws Exception {
+        log.info("📊 Calculando costo de upgrade para usuario: {} al plan: {}",
+                request.userId(), request.newPlanId());
 
+        // 1️⃣ Buscar el pago activo actual
+        PaymentEntity currentPayment = findActivePaymentForUser(request.userId());
+        PlanEntity currentPlan = currentPayment.getPlan();
+        PlanEntity newPlan = findPlanById(request.newPlanId());
+
+        // 2️⃣ Validaciones
+        validatePlanUpgrade(currentPlan, newPlan);
+
+        // 3️⃣ Calcular el costo prorrateado
+        OffsetDateTime startDate = currentPayment.getDateApproved();
+        if (startDate == null) {
+            startDate = currentPayment.getDateCreated();
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+
+        long cycleDurationInDays = currentPlan.getDurationMonths() * 30L;
+        long daysElapsed = ChronoUnit.DAYS.between(startDate, now);
+        long daysRemaining = cycleDurationInDays - daysElapsed;
+
+        BigDecimal dailyCostCurrent = currentPlan.getPrice()
+                .divide(BigDecimal.valueOf(cycleDurationInDays), 10, RoundingMode.HALF_UP);
+        BigDecimal dailyCostNew = newPlan.getPrice()
+                .divide(BigDecimal.valueOf(cycleDurationInDays), 10, RoundingMode.HALF_UP);
+
+        BigDecimal unusedCredit = dailyCostCurrent.multiply(BigDecimal.valueOf(daysRemaining));
+        BigDecimal remainingCostNewPlan = dailyCostNew.multiply(BigDecimal.valueOf(daysRemaining));
+        BigDecimal upgradeCost = remainingCostNewPlan.subtract(unusedCredit)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        // 4️⃣ Validar que el costo sea positivo
+        validateUpgradeCost(upgradeCost);
+
+        log.info("💰 Cálculo completado - Upgrade cost: {}, Días restantes: {}",
+                upgradeCost, daysRemaining);
+
+        return new UpgradeCostResponse(
+                newPlan.getPrice(),
+                upgradeCost,
+                unusedCredit,
+                daysRemaining,
+                newPlan.getName(),
+                newPlan.getDescription()
+        );
+    }
     @Override
     public void updatePaymentFromMpPayment(Payment payment) {
         if (payment == null)
@@ -505,5 +557,152 @@ public class PaymentServiceImpl implements PaymentService {
             return "down";
         return "neutral";
     }
+
+    private BigDecimal calculateProratedUpgradeCost(PaymentEntity currentPayment, PlanEntity newPlan) {
+        PlanEntity currentPlan = currentPayment.getPlan();
+        OffsetDateTime startDate = currentPayment.getDateApproved(); //cuando en realidad empezo la sub
+        if (startDate == null) {
+            startDate = currentPayment.getDateCreated();
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+
+        long cycleDurationInDays = currentPlan.getDurationMonths() * 30L; //  30 días por mes
+        long daysElapsed = ChronoUnit.DAYS.between(startDate, now);
+        long daysRemaining = cycleDurationInDays - daysElapsed;
+
+        log.info("Cálculo de prorrateo: Días en ciclo: {}, Días transcurridos: {}, Días restantes: {}", cycleDurationInDays, daysElapsed, daysRemaining);
+
+        if (daysRemaining <= 0) {
+            return newPlan.getPrice();
+        }
+
+        BigDecimal dailyCostCurrent = currentPlan.getPrice().divide(BigDecimal.valueOf(cycleDurationInDays), 10, RoundingMode.HALF_UP);
+        BigDecimal dailyCostNew = newPlan.getPrice().divide(BigDecimal.valueOf(cycleDurationInDays), 10, RoundingMode.HALF_UP);
+
+        BigDecimal unusedCredit = dailyCostCurrent.multiply(BigDecimal.valueOf(daysRemaining));
+        BigDecimal remainingCostNewPlan = dailyCostNew.multiply(BigDecimal.valueOf(daysRemaining));
+
+        BigDecimal proratedCost = remainingCostNewPlan.subtract(unusedCredit);
+        return proratedCost.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private void cancelOldSubscriptionAndUpdateState(PaymentEntity oldPayment) {
+        try {
+            log.info("🔴 Cancelando pago anterior ID: {} (Payment ID: {})",
+                    oldPayment.getId(), oldPayment.getPaymentId());
+
+            // ✅ Actualizar el estado del pago anterior en la BD
+            oldPayment.setStatus("cancelled");
+            oldPayment.setStatusDetail("Cancelled due to plan upgrade");
+            paymentRepository.save(oldPayment);
+
+            log.info("✅ Pago anterior actualizado a 'cancelled' en la base de datos");
+
+            // 🔄 Si tenía subscription ID, cancelarla en Mercado Pago
+            if (oldPayment.getMercadoPagoSubscriptionId() != null &&
+                    !oldPayment.getMercadoPagoSubscriptionId().isEmpty()) {
+
+                log.info("📞 Cancelando suscripción en Mercado Pago: {}",
+                        oldPayment.getMercadoPagoSubscriptionId());
+
+                try {
+                    mercadoPagoApiClient.cancelSubscription(
+                            oldPayment.getMercadoPagoSubscriptionId(),
+                            new SubscriptionCancelRequest("cancelled")
+                    );
+                    log.info("✅ Suscripción cancelada en Mercado Pago");
+                } catch (
+                        Exception mpEx) {
+                    log.error("❌ Error cancelando suscripción en MP (no crítico): {}",
+                            mpEx.getMessage());
+                    // No lanzamos la excepción porque ya actualizamos la BD
+                }
+            }
+
+            // 🔄 Intentar reembolso si es necesario (opcional)
+            if (oldPayment.getPaymentId() != null) {
+                try {
+                    log.info("💰 Intentando reembolso del pago ID: {}", oldPayment.getPaymentId());
+                    mercadoPagoApiClient.createRefund(oldPayment.getPaymentId());
+                    log.info("✅ Reembolso procesado correctamente");
+
+                    oldPayment.setStatus("refunded");
+                    oldPayment.setStatusDetail("Refunded due to plan upgrade");
+                    paymentRepository.save(oldPayment);
+                } catch (
+                        Exception refundEx) {
+                    log.warn("⚠️ No se pudo procesar el reembolso (puede que no sea elegible): {}",
+                            refundEx.getMessage());
+                    // Mantenemos el estado como "cancelled"
+                }
+            }
+
+        } catch (
+                Exception e) {
+            log.error("❌ Error crítico cancelando pago anterior: {}", e.getMessage(), e);
+            throw new RuntimeException("Error al cancelar el pago anterior: " + e.getMessage());
+        }
+    }
+
+    private PaymentEntity findActivePaymentForUser(UUID userId) {
+        log.debug("Buscando pago activo para el usuario: {}", userId);
+        return paymentRepository.findFirstByUserIdAndStatusOrderByDateApprovedDesc(userId, "approved")
+                .orElseThrow(() -> new EntityNotFoundException("No se encontró un plan activo para el usuario " + userId));
+    }
+
+
+    private PlanEntity findPlanById(UUID planId) {
+        log.debug("Buscando plan con ID: {}", planId);
+        return planRepository.findById(planId)
+                .orElseThrow(() -> new EntityNotFoundException("El nuevo plan con ID " + planId + " no existe."));
+    }
+
+
+    private DirectPaymentRequest createUpgradePaymentRequest(PlanUpgradeRequestDto upgradeRequest, BigDecimal amountToCharge, PlanEntity newPlan, PaymentEntity currentPayment) {
+        String externalReference = "UPGRADE-" + upgradeRequest.userId() + "-" + System.currentTimeMillis();
+        log.debug("Creando DirectPaymentRequest con referencia externa: {}", externalReference);
+
+        return new DirectPaymentRequest(
+                externalReference,
+                upgradeRequest.userId(),
+                newPlan.getId(),
+                amountToCharge,
+                currentPayment.getPayerEmail(),
+                currentPayment.getPayerFirstName(),
+                currentPayment.getPayerLastName(),
+                "Upgrade al plan " + newPlan.getName(),
+                upgradeRequest.token(),
+                upgradeRequest.installments(),
+                upgradeRequest.paymentMethodId(),
+                currentPayment.getPayerIdentificationType(),
+                currentPayment.getPayerIdentificationNumber()
+        );
+    }
+
+
+    private void cancelOldSubscriptionAndUpdateState(PaymentEntity currentPayment, PlanEntity newPlan) {
+        log.info("Pago de upgrade aprobado. Procediendo a cancelar la suscripción anterior y actualizar estado.");
+        try {
+            String oldSubscriptionId = currentPayment.getMercadoPagoSubscriptionId();
+            if (oldSubscriptionId == null || oldSubscriptionId.isBlank()) {
+                throw new IllegalStateException("CRÍTICO: No se puede cancelar la suscripción antigua porque 'mercadoPagoSubscriptionId' está vacío para el pago ID: " + currentPayment.getId());
+            }
+
+            log.debug("Enviando solicitud de cancelación a Mercado Pago para la suscripción: {}", oldSubscriptionId);
+            mercadoPagoApiClient.cancelSubscription(oldSubscriptionId, new SubscriptionCancelRequest("cancelled"));
+            log.info("Suscripción antigua ({}) cancelada exitosamente en Mercado Pago.", oldSubscriptionId);
+
+            currentPayment.setStatus("CANCELLED");
+            currentPayment.setStatusDetail("Plan actualizado a " + newPlan.getName() + " y suscripción anterior cancelada.");
+            paymentRepository.save(currentPayment);
+            log.info("Estado del pago antiguo (ID: {}) actualizado a CANCELLED en la BD local.", currentPayment.getId());
+
+        } catch (
+                Exception e) {
+            log.error("Error CRÍTICO: El pago del upgrade fue APROBADO, pero falló la cancelación de la suscripción antigua (ID: {}). Error: {}. SE REQUIERE INTERVENCIÓN MANUAL.", currentPayment.getMercadoPagoSubscriptionId(), e.getMessage(), e);
+            throw new RuntimeException("El pago se procesó, pero no se pudo cancelar la suscripción anterior. Contacte a soporte.", e);
+        }
+    }
+
 
 }
