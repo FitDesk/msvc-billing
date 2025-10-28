@@ -1,12 +1,18 @@
 package com.msvcbilling.services.impl;
 
 import com.mercadopago.client.common.IdentificationRequest;
+import com.mercadopago.client.customer.CustomerClient;
+import com.mercadopago.client.customer.CustomerRequest;
 import com.mercadopago.client.payment.PaymentClient;
 import com.mercadopago.client.payment.PaymentCreateRequest;
 import com.mercadopago.client.payment.PaymentPayerRequest;
 import com.mercadopago.client.paymentmethod.PaymentMethodClient;
 import com.mercadopago.core.MPRequestOptions;
 import com.mercadopago.exceptions.MPApiException;
+import com.mercadopago.exceptions.MPException;
+import com.mercadopago.net.MPResultsResourcesPage;
+import com.mercadopago.net.MPSearchRequest;
+import com.mercadopago.resources.customer.Customer;
 import com.mercadopago.resources.payment.Payment;
 import com.mercadopago.resources.paymentmethod.PaymentMethod;
 import com.msvcbilling.clients.MercadoPagoApiClient;
@@ -54,6 +60,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final PlanRepository planRepository;
     private final PaymentClient paymentClient;
     private final PaymentMethodClient paymentMethodClient;
+    private final CustomerClient customerClient;
     private final PaymentMapper paymentMapper;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final MercadoPagoApiClient mercadoPagoApiClient;
@@ -88,13 +95,14 @@ public class PaymentServiceImpl implements PaymentService {
         try {
             log.info(" Creando pago - Monto: {}, Email: {}, Método: {}",
                     request.amount(), request.payerEmail(), request.paymentMethodId());
-
+            String customerId = getOrCreateMpCustomer(request.payerEmail());
             IdentificationRequest identification = IdentificationRequest.builder()
                     .type(request.identificationType())
                     .number(request.identificationNumber())
                     .build();
 
             PaymentPayerRequest payer = PaymentPayerRequest.builder()
+                    .id(customerId) // Añadir el ID del cliente
                     .email(request.payerEmail())
                     .firstName(request.payerFirstName())
                     .lastName(request.payerLastName())
@@ -197,24 +205,23 @@ public class PaymentServiceImpl implements PaymentService {
     public PaymentResponse processPlanUpgrade(PlanUpgradeRequestDto request) throws Exception {
         log.info("🔄 Iniciando proceso de upgrade para usuario: {}", request.userId());
     
-        // 1️⃣ Buscar el pago activo actual
+        //  Buscar el pago activo actual
         PaymentEntity currentPayment = findActivePaymentForUser(request.userId());
         PlanEntity currentPlan = currentPayment.getPlan();
         PlanEntity newPlan = findPlanById(request.newPlanId());
     
-        // 2️⃣ Validaciones
+        //  Validaciones
         validatePlanUpgrade(currentPlan, newPlan);
         BigDecimal upgradeCost = calculateProratedUpgradeCost(currentPayment, newPlan);
         validateUpgradeCost(upgradeCost);
     
         log.info("💰 Costo de upgrade calculado: {}", upgradeCost);
     
-        // 3️⃣ Crear el request para el nuevo pago (✅ CON LOS 4 PARÁMETROS)
         DirectPaymentRequest upgradePaymentRequest = createUpgradePaymentRequest(
-            request,           // 1. PlanUpgradeRequestDto
-            upgradeCost,       // 2. BigDecimal amountToCharge
-            newPlan,           // 3. PlanEntity newPlan
-            currentPayment     // 4. PaymentEntity currentPayment ← Este era el que faltaba
+            request,
+            upgradeCost,
+            newPlan,
+            currentPayment
         );
     
         // 4️⃣ Procesar el nuevo pago
@@ -321,15 +328,15 @@ public class PaymentServiceImpl implements PaymentService {
         log.info("📊 Calculando costo de upgrade para usuario: {} al plan: {}",
                 request.userId(), request.newPlanId());
 
-        // 1️⃣ Buscar el pago activo actual
+        //  Buscar el pago activo actual
         PaymentEntity currentPayment = findActivePaymentForUser(request.userId());
         PlanEntity currentPlan = currentPayment.getPlan();
         PlanEntity newPlan = findPlanById(request.newPlanId());
 
-        // 2️⃣ Validaciones
+        //  Validaciones
         validatePlanUpgrade(currentPlan, newPlan);
 
-        // 3️⃣ Calcular el costo prorrateado
+        //  Calcular el costo prorrateado
         OffsetDateTime startDate = currentPayment.getDateApproved();
         if (startDate == null) {
             startDate = currentPayment.getDateCreated();
@@ -350,7 +357,7 @@ public class PaymentServiceImpl implements PaymentService {
         BigDecimal upgradeCost = remainingCostNewPlan.subtract(unusedCredit)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        // 4️⃣ Validar que el costo sea positivo
+        //  Validar que el costo sea positivo
         validateUpgradeCost(upgradeCost);
 
         log.info("💰 Cálculo completado - Upgrade cost: {}, Días restantes: {}",
@@ -458,7 +465,24 @@ public class PaymentServiceImpl implements PaymentService {
             log.error(" Error enviando evento de pago aprobado", e);
         }
     }
+    private String getOrCreateMpCustomer(String email) throws MPApiException, MPException {
+        Map<String, Object> filters = new HashMap<>();
+        filters.put("email", email);
 
+        MPSearchRequest searchRequest = MPSearchRequest.builder().limit(1).offset(0).filters(filters).build();
+
+        MPResultsResourcesPage<Customer> searchResults = customerClient.search(searchRequest);
+
+        if (searchResults.getResults() != null && !searchResults.getResults().isEmpty()) {
+            log.info("Cliente de Mercado Pago encontrado para email: {}", email);
+            return searchResults.getResults().get(0).getId();
+        } else {
+            log.info("No se encontró cliente de Mercado Pago. Creando uno nuevo para email: {}", email);
+            CustomerRequest customerRequest = CustomerRequest.builder().email(email).build();
+            Customer newCustomer = customerClient.create(customerRequest);
+            return newCustomer.getId();
+        }
+    }
     @Override
     @Transactional
     public void simulatePaymentApproval(String externalReference, String authorizationCode) {
@@ -677,31 +701,6 @@ public class PaymentServiceImpl implements PaymentService {
                 currentPayment.getPayerIdentificationType(),
                 currentPayment.getPayerIdentificationNumber()
         );
-    }
-
-
-    private void cancelOldSubscriptionAndUpdateState(PaymentEntity currentPayment, PlanEntity newPlan) {
-        log.info("Pago de upgrade aprobado. Procediendo a cancelar la suscripción anterior y actualizar estado.");
-        try {
-            String oldSubscriptionId = currentPayment.getMercadoPagoSubscriptionId();
-            if (oldSubscriptionId == null || oldSubscriptionId.isBlank()) {
-                throw new IllegalStateException("CRÍTICO: No se puede cancelar la suscripción antigua porque 'mercadoPagoSubscriptionId' está vacío para el pago ID: " + currentPayment.getId());
-            }
-
-            log.debug("Enviando solicitud de cancelación a Mercado Pago para la suscripción: {}", oldSubscriptionId);
-            mercadoPagoApiClient.cancelSubscription(oldSubscriptionId, new SubscriptionCancelRequest("cancelled"));
-            log.info("Suscripción antigua ({}) cancelada exitosamente en Mercado Pago.", oldSubscriptionId);
-
-            currentPayment.setStatus("CANCELLED");
-            currentPayment.setStatusDetail("Plan actualizado a " + newPlan.getName() + " y suscripción anterior cancelada.");
-            paymentRepository.save(currentPayment);
-            log.info("Estado del pago antiguo (ID: {}) actualizado a CANCELLED en la BD local.", currentPayment.getId());
-
-        } catch (
-                Exception e) {
-            log.error("Error CRÍTICO: El pago del upgrade fue APROBADO, pero falló la cancelación de la suscripción antigua (ID: {}). Error: {}. SE REQUIERE INTERVENCIÓN MANUAL.", currentPayment.getMercadoPagoSubscriptionId(), e.getMessage(), e);
-            throw new RuntimeException("El pago se procesó, pero no se pudo cancelar la suscripción anterior. Contacte a soporte.", e);
-        }
     }
 
 
