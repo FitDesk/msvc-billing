@@ -1,6 +1,8 @@
 package com.msvcbilling.config;
 
 import com.mercadopago.client.cardtoken.CardTokenClient;
+import com.mercadopago.client.customer.CustomerCardClient;
+import com.mercadopago.client.customer.CustomerClient;
 import com.mercadopago.client.payment.PaymentClient;
 import com.mercadopago.client.paymentmethod.PaymentMethodClient;
 import org.springframework.context.annotation.Bean;
@@ -22,5 +24,15 @@ public class MercadoPagoClientConfig {
     @Bean
     public PaymentMethodClient paymentMethodClient() {
         return new PaymentMethodClient();
+    }
+
+    @Bean
+    public CustomerClient customerClient() {
+        return new CustomerClient();
+    }
+
+    @Bean
+    public CustomerCardClient customerCardClient() {
+        return new CustomerCardClient();
     }
 }

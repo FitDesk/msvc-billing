@@ -62,6 +62,9 @@ public class PaymentEntity {
     @Column(name = "status")
     private String status;
 
+    @Column(name = "mercado_pago_subscription_id")
+    private String mercadoPagoSubscriptionId;
+
     @Column(name = "status_detail")
     private String statusDetail;
 

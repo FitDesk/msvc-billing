@@ -156,4 +156,15 @@ public class GlobalExceptionController {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
     }
 
+    @ExceptionHandler(PaymentMethodValidationException.class)
+    public ResponseEntity<ErrorResponse> handlePaymentMethodValidationException(PaymentMethodValidationException ex) {
+        ErrorResponse errorResponse = new ErrorResponse(
+                "PAYMENT_METHOD_VALIDATION_ERROR",
+                "Error de validación en el método de pago",
+                Collections.singletonList(ex.getMessage())
+        );
+
+        log.warn("Payment method validation error: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
+    }
 }

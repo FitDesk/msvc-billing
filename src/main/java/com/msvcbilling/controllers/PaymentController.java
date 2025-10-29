@@ -1,10 +1,7 @@
 package com.msvcbilling.controllers;
 
 import com.msvcbilling.annotations.AdminAccess;
-import com.msvcbilling.dtos.payment.DirectPaymentRequest;
-import com.msvcbilling.dtos.payment.PaymentDetailsResponseDto;
-import com.msvcbilling.dtos.payment.PaymentResponse;
-import com.msvcbilling.dtos.payment.PlanUpgradeRequestDto;
+import com.msvcbilling.dtos.payment.*;
 import com.msvcbilling.dtos.statistics.DashboardStatisticsResponseDto;
 import com.msvcbilling.services.PaymentService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -78,6 +75,23 @@ public class PaymentController {
                 Exception e) {
             log.error("Error consultando estado de pago para referencia: {}", externalReference, e);
             throw new RuntimeException("Error al consultar estado de pago: " + e.getMessage());
+        }
+    }
+
+    @Operation(summary = "Calcular costo de upgrade",
+            description = "Calcula el costo prorrateado para cambiar a un nuevo plan sin procesar el pago")
+    @PostMapping("/calculate-upgrade-cost")
+    public ResponseEntity<UpgradeCostResponse> calculateUpgradeCost(@Valid @RequestBody UpgradeCostCalculationRequest request) {
+        try {
+            log.info("Calculando costo de upgrade para usuario: {} al plan: {}",
+                    request.userId(), request.newPlanId());
+            UpgradeCostResponse response = paymentService.calculateUpgradeCost(request);
+            log.info("Cálculo completado. Costo del upgrade: {}", response.upgradeCost());
+            return ResponseEntity.ok(response);
+        } catch (
+                Exception e) {
+            log.error("Error calculando costo de upgrade para usuario: {}", request.userId(), e);
+            throw new RuntimeException("Error al calcular el costo del upgrade: " + e.getMessage());
         }
     }
 
