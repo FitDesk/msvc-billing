@@ -5,7 +5,7 @@ import java.util.UUID;
 public record SavedPaymentMethodDto(
         UUID id,
         String lastFourDigits,
-        String cardToken, // <-- AÑADE ESTE CAMPO
+        String cardToken,
         String cardHolderName,
         String cardBrand,
         String cardType,

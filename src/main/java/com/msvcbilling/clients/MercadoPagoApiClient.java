@@ -23,11 +23,4 @@ public interface MercadoPagoApiClient {
 
     @PostMapping("/v1/payments/{payment_id}/refunds")
     void createRefund(@PathVariable("payment_id") Long paymentId);
-
-    // Si necesitas hacer una devolución parcial, puedes añadir otro método:
-    // @PostMapping("/v1/payments/{payment_id}/refunds")
-    // void createPartialRefund(
-    //        @PathVariable("payment_id") Long paymentId,
-    //        @RequestBody RefundRequest refundRequest
-    // );
 }

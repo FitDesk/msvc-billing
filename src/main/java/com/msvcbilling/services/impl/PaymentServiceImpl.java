@@ -67,145 +67,129 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     @Override
     public PaymentResponse processDirectPayment(DirectPaymentRequest request)
-        throws Exception {
+            throws Exception {
         log.info(
-            "Procesando pago directo para referencia: {}",
-            request.externalReference()
-        );
+                "Procesando pago directo para referencia: {}",
+                request.externalReference());
 
         PlanEntity plan = planRepository
-            .findById(request.planId())
-            .orElseThrow(() -> new PlanNotFoundException(request.planId()));
+                .findById(request.planId())
+                .orElseThrow(() -> new PlanNotFoundException(request.planId()));
 
         if (!plan.getIsActive()) {
             throw new PlanNotActiveException(
-                "El plan selecionado no esta activo"
-            );
+                    "El plan selecionado no esta activo");
         }
         boolean isUpgrade = request.externalReference().startsWith("UPGRADE-");
         if (!isUpgrade && plan.getPrice().compareTo(request.amount()) != 0) {
             throw new IllegalArgumentException(
-                "El monto no coincide con el precio del plan"
-            );
+                    "El monto no coincide con el precio del plan");
         }
 
         if (isUpgrade) {
             log.info(
-                "💰 Procesando UPGRADE - Monto prorrateado: {}, Plan nuevo: {}",
-                request.amount(),
-                plan.getName()
-            );
+                    " Procesando UPGRADE - Monto prorrateado: {}, Plan nuevo: {}",
+                    request.amount(),
+                    plan.getName());
         }
-        Optional<PaymentEntity> existing =
-            paymentRepository.findByExternalReference(
-                request.externalReference()
-            );
+        Optional<PaymentEntity> existing = paymentRepository.findByExternalReference(
+                request.externalReference());
         if (existing.isPresent()) {
             PaymentEntity existingPayment = existing.get();
             log.info(
-                " Pago ya existe, retornando existente: {}",
-                existingPayment.getPaymentId()
-            );
+                    " Pago ya existe, retornando existente: {}",
+                    existingPayment.getPaymentId());
             return paymentMapper.entityToResponse(existingPayment);
         }
 
         try {
             log.info(
-                " Creando pago - Monto: {}, Email: {}, Método: {}",
-                request.amount(),
-                request.payerEmail(),
-                request.paymentMethodId()
-            );
+                    " Creando pago - Monto: {}, Email: {}, Método: {}",
+                    request.amount(),
+                    request.payerEmail(),
+                    request.paymentMethodId());
             String customerId = getOrCreateMpCustomer(request.payerEmail());
-            IdentificationRequest identification =
-                IdentificationRequest.builder()
+            IdentificationRequest identification = IdentificationRequest.builder()
                     .type(request.identificationType())
                     .number(request.identificationNumber())
                     .build();
 
             PaymentPayerRequest payer = PaymentPayerRequest.builder()
-                .id(customerId) // Añadir el ID del cliente
-                .email(request.payerEmail())
-                .firstName(request.payerFirstName())
-                .lastName(request.payerLastName())
-                .identification(identification)
-                .build();
+                    .id(customerId)
+                    .email(request.payerEmail())
+                    .firstName(request.payerFirstName())
+                    .lastName(request.payerLastName())
+                    .identification(identification)
+                    .build();
 
             PaymentCreateRequest paymentRequest = PaymentCreateRequest.builder()
-                .transactionAmount(request.amount())
-                .token(request.token())
-                .description(
-                    request.description() != null
-                        ? request.description()
-                        : "Pago FitDesk"
-                )
-                .installments(request.installments())
-                .externalReference(request.externalReference())
-                .payer(payer)
-                .statementDescriptor("FITDESK")
-                .binaryMode(false)
-                .build();
+                    .transactionAmount(request.amount())
+                    .token(request.token())
+                    .description(
+                            request.description() != null
+                                    ? request.description()
+                                    : "Pago FitDesk")
+                    .installments(request.installments())
+                    .externalReference(request.externalReference())
+                    .payer(payer)
+                    .statementDescriptor("FITDESK")
+                    .binaryMode(false)
+                    .build();
 
             Map<String, String> headers = new HashMap<>();
             headers.put("x-idempotency-key", UUID.randomUUID().toString());
             MPRequestOptions options = MPRequestOptions.builder()
-                .customHeaders(headers)
-                .build();
+                    .customHeaders(headers)
+                    .build();
 
             log.info("Enviando request a Mercado Pago...");
             Payment payment = paymentClient.create(paymentRequest, options);
 
             log.info(
-                " Pago creado en Mercado Pago. ID: {}, Status: {}, Detail: {}",
-                payment.getId(),
-                payment.getStatus(),
-                payment.getStatusDetail()
-            );
+                    " Pago creado en Mercado Pago. ID: {}, Status: {}, Detail: {}",
+                    payment.getId(),
+                    payment.getStatus(),
+                    payment.getStatusDetail());
             String authCode = payment.getAuthorizationCode();
             if (authCode == null || authCode.isEmpty()) {
                 authCode = "PENDING";
                 log.warn(
-                    " Pago en proceso. AuthCode será actualizado posteriormente"
-                );
+                        " Pago en proceso. AuthCode será actualizado posteriormente");
             }
             PaymentEntity paymentEntity = PaymentEntity.builder()
-                .id(UUID.randomUUID())
-                .userId(request.userId())
-                .plan(plan)
-                .externalReference(request.externalReference())
-                .paymentId(payment.getId())
-                .token(request.token())
-                .paymentMethodId(payment.getPaymentMethodId())
-                .paymentTypeId(payment.getPaymentTypeId())
-                .installments(payment.getInstallments())
-                .authorizationCode(authCode)
-                .transactionId(payment.getId().toString())
-                .amount(payment.getTransactionAmount())
-                .currencyId(payment.getCurrencyId())
-                .status(payment.getStatus())
-                .statusDetail(payment.getStatusDetail())
-                .payerEmail(request.payerEmail())
-                .payerFirstName(request.payerFirstName())
-                .payerLastName(request.payerLastName())
-                .payerIdentificationType(request.identificationType())
-                .payerIdentificationNumber(request.identificationNumber())
-                .dateCreated(
-                    payment.getDateCreated() != null
-                        ? OffsetDateTime.ofInstant(
-                              payment.getDateCreated().toInstant(),
-                              ZoneOffset.UTC
-                          )
-                        : OffsetDateTime.now()
-                )
-                .dateApproved(
-                    payment.getDateApproved() != null
-                        ? OffsetDateTime.ofInstant(
-                              payment.getDateApproved().toInstant(),
-                              ZoneOffset.UTC
-                          )
-                        : null
-                )
-                .build();
+                    .id(UUID.randomUUID())
+                    .userId(request.userId())
+                    .plan(plan)
+                    .externalReference(request.externalReference())
+                    .paymentId(payment.getId())
+                    .token(request.token())
+                    .paymentMethodId(payment.getPaymentMethodId())
+                    .paymentTypeId(payment.getPaymentTypeId())
+                    .installments(payment.getInstallments())
+                    .authorizationCode(authCode)
+                    .transactionId(payment.getId().toString())
+                    .amount(payment.getTransactionAmount())
+                    .currencyId(payment.getCurrencyId())
+                    .status(payment.getStatus())
+                    .statusDetail(payment.getStatusDetail())
+                    .payerEmail(request.payerEmail())
+                    .payerFirstName(request.payerFirstName())
+                    .payerLastName(request.payerLastName())
+                    .payerIdentificationType(request.identificationType())
+                    .payerIdentificationNumber(request.identificationNumber())
+                    .dateCreated(
+                            payment.getDateCreated() != null
+                                    ? OffsetDateTime.ofInstant(
+                                            payment.getDateCreated().toInstant(),
+                                            ZoneOffset.UTC)
+                                    : OffsetDateTime.now())
+                    .dateApproved(
+                            payment.getDateApproved() != null
+                                    ? OffsetDateTime.ofInstant(
+                                            payment.getDateApproved().toInstant(),
+                                            ZoneOffset.UTC)
+                                    : null)
+                    .build();
 
             paymentRepository.save(paymentEntity);
 
@@ -214,9 +198,8 @@ public class PaymentServiceImpl implements PaymentService {
                 sendPaymentApprovedEvent(paymentEntity, request);
             } else {
                 log.warn(
-                    "Pago en estado: {}. Esperando confirmación",
-                    payment.getStatus()
-                );
+                        "Pago en estado: {}. Esperando confirmación",
+                        payment.getStatus());
             }
             return paymentMapper.entityToResponse(paymentEntity);
         } catch (MPApiException mpEx) {
@@ -227,9 +210,8 @@ public class PaymentServiceImpl implements PaymentService {
             try {
                 if (mpEx.getApiResponse() != null) {
                     log.error(
-                        "API Response: {}",
-                        mpEx.getApiResponse().getContent()
-                    );
+                            "API Response: {}",
+                            mpEx.getApiResponse().getContent());
                 }
             } catch (Exception e) {
                 log.warn("No se pudo obtener detalles de la respuesta de MP");
@@ -245,106 +227,57 @@ public class PaymentServiceImpl implements PaymentService {
     @Transactional
     @Override
     public PaymentResponse processPlanUpgrade(PlanUpgradeRequestDto request)
-        throws Exception {
+            throws Exception {
         log.info(
-            "🔄 Iniciando proceso de upgrade para usuario: {}",
-            request.userId()
-        );
+                "Iniciando proceso de upgrade para usuario: {}",
+                request.userId());
 
-        //  Buscar el pago activo actual
+        // Buscar el pago activo actual
         PaymentEntity currentPayment = findActivePaymentForUser(
-            request.userId()
-        );
+                request.userId());
         PlanEntity currentPlan = currentPayment.getPlan();
         PlanEntity newPlan = findPlanById(request.newPlanId());
 
-        //  Validaciones
+        // Validaciones
         validatePlanUpgrade(currentPlan, newPlan);
         BigDecimal upgradeCost = calculateProratedUpgradeCost(
-            currentPayment,
-            newPlan
-        );
+                currentPayment,
+                newPlan);
         validateUpgradeCost(upgradeCost);
 
-        log.info("💰 Costo de upgrade calculado: {}", upgradeCost);
+        log.info(" Costo de upgrade calculado: {}", upgradeCost);
 
-        DirectPaymentRequest upgradePaymentRequest =
-            createUpgradePaymentRequest(
+        DirectPaymentRequest upgradePaymentRequest = createUpgradePaymentRequest(
                 request,
                 upgradeCost,
                 newPlan,
-                currentPayment
-            );
+                currentPayment);
 
-        // 4️⃣ Procesar el nuevo pago
         PaymentResponse newPaymentResponse = processDirectPayment(
-            upgradePaymentRequest
-        );
-
-        // 5️⃣ Cancelar el pago anterior SOLO si el nuevo fue aprobado
+                upgradePaymentRequest);
+                
         if ("approved".equals(newPaymentResponse.status())) {
-            log.info(
-                "✅ Nuevo pago aprobado. Cancelando pago anterior ID: {}",
-                currentPayment.getId()
-            );
             cancelOldSubscriptionAndUpdateState(currentPayment);
         } else {
             log.warn(
-                "⚠️ Nuevo pago NO aprobado (estado: {}). No se cancela el pago anterior.",
-                newPaymentResponse.status()
-            );
+                    "⚠️ Nuevo pago NO aprobado (estado: {}). No se cancela el pago anterior.",
+                    newPaymentResponse.status());
         }
 
         return newPaymentResponse;
     }
 
-    //    //    @Override
-    //    @Transactional
-    //    public void processRefund(Long paymentId) {
-    //        log.info("Iniciando proceso de devolución para el pago con ID local: {}", paymentId);
-    //
-    //        Payment payment = paymentRepository.findById(paymentId)
-    //                .orElseThrow(() -> new EntityNotFoundException("No se encontró el pago con ID " + paymentId));
-    //
-    //        if (!"approved".equals(payment.getStatus())) {
-    //            throw new IllegalArgumentException("Solo se pueden devolver pagos 'approved'.");
-    //        }
-    //
-    //        Long mercadoPagoPaymentId = payment.getMercadoPagoPaymentId();
-    //        if (mercadoPagoPaymentId == null) {
-    //            throw new IllegalStateException("No se encontró el ID del pago de Mercado Pago.");
-    //        }
-    //
-    //        try {
-    //            // ¡AQUÍ ESTÁ EL CAMBIO! Usamos el cliente Feign para la devolución.
-    //            mercadoPagoApiClient.createRefund(mercadoPagoPaymentId);
-    //            log.info("Devolución para el pago de MP {} procesada exitosamente vía Feign.", mercadoPagoPaymentId);
-    //
-    //            payment.setStatus("refunded");
-    //            payment.setReason("Devolución procesada a petición.");
-    //            paymentRepository.save(payment);
-    //
-    //        } catch (
-    //                Exception e) {
-    //            log.error("Error al procesar devolución con Feign para el pago de MP {}. Error: {}", mercadoPagoPaymentId, e.getMessage());
-    //            throw new RuntimeException("Fallo al procesar la devolución en Mercado Pago.", e);
-    //        }
-    //    }
-
     @Transactional
     @Override
     public PaymentResponse getPaymentStatus(String externalReference) {
         log.info(
-            "Consultando estado de pago para referencia: {}",
-            externalReference
-        );
+                "Consultando estado de pago para referencia: {}",
+                externalReference);
 
-        Optional<PaymentEntity> paymentOpt =
-            paymentRepository.findByExternalReference(externalReference);
+        Optional<PaymentEntity> paymentOpt = paymentRepository.findByExternalReference(externalReference);
         if (paymentOpt.isEmpty()) {
             throw new RuntimeException(
-                "Pago no encontrado para la referencia: " + externalReference
-            );
+                    "Pago no encontrado para la referencia: " + externalReference);
         }
 
         PaymentEntity paymentEntity = paymentOpt.get();
@@ -352,25 +285,20 @@ public class PaymentServiceImpl implements PaymentService {
         if (paymentEntity.getPaymentId() != null) {
             try {
                 Payment mpPayment = paymentClient.get(
-                    paymentEntity.getPaymentId()
-                );
-                if (
-                    mpPayment != null &&
-                    !Objects.equals(
-                        paymentEntity.getStatus(),
-                        mpPayment.getStatus()
-                    )
-                ) {
+                        paymentEntity.getPaymentId());
+                if (mpPayment != null &&
+                        !Objects.equals(
+                                paymentEntity.getStatus(),
+                                mpPayment.getStatus())) {
                     updatePaymentFromMpPayment(mpPayment);
                     paymentEntity = paymentRepository
-                        .findByExternalReference(externalReference)
-                        .orElse(paymentEntity);
+                            .findByExternalReference(externalReference)
+                            .orElse(paymentEntity);
                 }
             } catch (Exception e) {
                 log.warn(
-                    "Error consultando estado en Mercado Pago: {}",
-                    e.getMessage()
-                );
+                        "Error consultando estado en Mercado Pago: {}",
+                        e.getMessage());
             }
         }
 
@@ -385,15 +313,13 @@ public class PaymentServiceImpl implements PaymentService {
             var response = paymentMethodClient.list();
             if (response != null && response.getResults() != null) {
                 return response
-                    .getResults()
-                    .stream()
-                    .filter(
-                        pm ->
-                            "credit_card".equals(pm.getPaymentTypeId()) ||
-                            "debit_card".equals(pm.getPaymentTypeId())
-                    )
-                    .map(PaymentMethod::getId)
-                    .collect(Collectors.toList());
+                        .getResults()
+                        .stream()
+                        .filter(
+                                pm -> "credit_card".equals(pm.getPaymentTypeId()) ||
+                                        "debit_card".equals(pm.getPaymentTypeId()))
+                        .map(PaymentMethod::getId)
+                        .collect(Collectors.toList());
             }
         } catch (Exception e) {
             log.warn("Error consultando métodos de pago: {}", e.getMessage());
@@ -404,25 +330,22 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     public UpgradeCostResponse calculateUpgradeCost(
-        UpgradeCostCalculationRequest request
-    ) throws Exception {
+            UpgradeCostCalculationRequest request) throws Exception {
         log.info(
-            "📊 Calculando costo de upgrade para usuario: {} al plan: {}",
-            request.userId(),
-            request.newPlanId()
-        );
+                " Calculando costo de upgrade para usuario: {} al plan: {}",
+                request.userId(),
+                request.newPlanId());
 
-        //  Buscar el pago activo actual
+        // Buscar el pago activo actual
         PaymentEntity currentPayment = findActivePaymentForUser(
-            request.userId()
-        );
+                request.userId());
         PlanEntity currentPlan = currentPayment.getPlan();
         PlanEntity newPlan = findPlanById(request.newPlanId());
 
-        //  Validaciones
+        // Validaciones
         validatePlanUpgrade(currentPlan, newPlan);
 
-        //  Calcular el costo prorrateado
+        // Calcular el costo prorrateado
         OffsetDateTime startDate = currentPayment.getDateApproved();
         if (startDate == null) {
             startDate = currentPayment.getDateCreated();
@@ -434,59 +357,53 @@ public class PaymentServiceImpl implements PaymentService {
         long daysRemaining = cycleDurationInDays - daysElapsed;
 
         BigDecimal dailyCostCurrent = currentPlan
-            .getPrice()
-            .divide(
-                BigDecimal.valueOf(cycleDurationInDays),
-                10,
-                RoundingMode.HALF_UP
-            );
+                .getPrice()
+                .divide(
+                        BigDecimal.valueOf(cycleDurationInDays),
+                        10,
+                        RoundingMode.HALF_UP);
         BigDecimal dailyCostNew = newPlan
-            .getPrice()
-            .divide(
-                BigDecimal.valueOf(cycleDurationInDays),
-                10,
-                RoundingMode.HALF_UP
-            );
+                .getPrice()
+                .divide(
+                        BigDecimal.valueOf(cycleDurationInDays),
+                        10,
+                        RoundingMode.HALF_UP);
 
         BigDecimal unusedCredit = dailyCostCurrent.multiply(
-            BigDecimal.valueOf(daysRemaining)
-        );
+                BigDecimal.valueOf(daysRemaining));
         BigDecimal remainingCostNewPlan = dailyCostNew.multiply(
-            BigDecimal.valueOf(daysRemaining)
-        );
+                BigDecimal.valueOf(daysRemaining));
         BigDecimal upgradeCost = remainingCostNewPlan
-            .subtract(unusedCredit)
-            .setScale(2, RoundingMode.HALF_UP);
+                .subtract(unusedCredit)
+                .setScale(2, RoundingMode.HALF_UP);
 
-        //  Validar que el costo sea positivo
         validateUpgradeCost(upgradeCost);
 
         log.info(
-            "💰 Cálculo completado - Upgrade cost: {}, Días restantes: {}",
-            upgradeCost,
-            daysRemaining
-        );
+                " Cálculo completado - Upgrade cost: {}, Días restantes: {}",
+                upgradeCost,
+                daysRemaining);
 
         return new UpgradeCostResponse(
-            newPlan.getPrice(),
-            upgradeCost,
-            unusedCredit,
-            daysRemaining,
-            newPlan.getName(),
-            newPlan.getDescription()
-        );
+                newPlan.getPrice(),
+                upgradeCost,
+                unusedCredit,
+                daysRemaining,
+                newPlan.getName(),
+                newPlan.getDescription());
     }
 
     @Override
     public void updatePaymentFromMpPayment(Payment payment) {
-        if (payment == null) return;
+        if (payment == null)
+            return;
 
         log.info(" Actualizando pago. Payment ID: {}", payment.getId());
 
         String extRef = payment.getExternalReference();
         String status = payment.getStatus() != null
-            ? payment.getStatus()
-            : "unknown";
+                ? payment.getStatus()
+                : "unknown";
 
         Optional<PaymentEntity> localOpt = Optional.empty();
 
@@ -505,35 +422,26 @@ public class PaymentServiceImpl implements PaymentService {
             local.setStatus(status);
             local.setStatusDetail(payment.getStatusDetail());
 
-            if (
-                payment.getAuthorizationCode() != null &&
-                !payment.getAuthorizationCode().isEmpty()
-            ) {
+            if (payment.getAuthorizationCode() != null &&
+                    !payment.getAuthorizationCode().isEmpty()) {
                 local.setAuthorizationCode(payment.getAuthorizationCode());
                 log.info(
-                    " Authorization Code actualizado: {}",
-                    payment.getAuthorizationCode()
-                );
+                        " Authorization Code actualizado: {}",
+                        payment.getAuthorizationCode());
             }
 
-            if (
-                payment.getDateApproved() != null &&
-                local.getDateApproved() == null
-            ) {
+            if (payment.getDateApproved() != null &&
+                    local.getDateApproved() == null) {
                 local.setDateApproved(
-                    OffsetDateTime.ofInstant(
-                        payment.getDateApproved().toInstant(),
-                        ZoneOffset.UTC
-                    )
-                );
+                        OffsetDateTime.ofInstant(
+                                payment.getDateApproved().toInstant(),
+                                ZoneOffset.UTC));
             }
 
             paymentRepository.save(local);
             log.info("Pago actualizado: {} -> {}", previousStatus, status);
 
-            if (
-                "approved".equals(status) && !"approved".equals(previousStatus)
-            ) {
+            if ("approved".equals(status) && !"approved".equals(previousStatus)) {
                 log.info(" Pago aprobado, enviando evento a Kafka");
                 sendPaymentApprovedEventFromEntity(local);
             }
@@ -543,18 +451,17 @@ public class PaymentServiceImpl implements PaymentService {
     private void sendPaymentApprovedEventFromEntity(PaymentEntity payment) {
         try {
             PaymentApprovedEvent event = new PaymentApprovedEvent(
-                payment.getId(),
-                payment.getUserId(),
-                payment.getPayerEmail(),
-                payment.getPayerFirstName() + " " + payment.getPayerLastName(),
-                payment.getPlan().getId(),
-                payment.getPlan().getName(),
-                payment.getPlan().getDurationMonths(),
-                payment.getAmount(),
-                payment.getExternalReference(),
-                payment.getDateCreated(),
-                payment.getTransactionId()
-            );
+                    payment.getId(),
+                    payment.getUserId(),
+                    payment.getPayerEmail(),
+                    payment.getPayerFirstName() + " " + payment.getPayerLastName(),
+                    payment.getPlan().getId(),
+                    payment.getPlan().getName(),
+                    payment.getPlan().getDurationMonths(),
+                    payment.getAmount(),
+                    payment.getExternalReference(),
+                    payment.getDateCreated(),
+                    payment.getTransactionId());
 
             kafkaTemplate.send("payment-approved-event-topic", event);
             log.info(" Evento enviado: {}", event);
@@ -564,23 +471,21 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     private void sendPaymentApprovedEvent(
-        PaymentEntity payment,
-        DirectPaymentRequest request
-    ) {
+            PaymentEntity payment,
+            DirectPaymentRequest request) {
         try {
             PaymentApprovedEvent event = new PaymentApprovedEvent(
-                payment.getId(),
-                payment.getUserId(),
-                payment.getPayerEmail(),
-                payment.getPayerFirstName() + " " + payment.getPayerLastName(),
-                payment.getPlan().getId(),
-                payment.getPlan().getName(),
-                payment.getPlan().getDurationMonths(),
-                payment.getAmount(),
-                payment.getExternalReference(),
-                payment.getDateCreated(),
-                payment.getTransactionId()
-            );
+                    payment.getId(),
+                    payment.getUserId(),
+                    payment.getPayerEmail(),
+                    payment.getPayerFirstName() + " " + payment.getPayerLastName(),
+                    payment.getPlan().getId(),
+                    payment.getPlan().getName(),
+                    payment.getPlan().getDurationMonths(),
+                    payment.getAmount(),
+                    payment.getExternalReference(),
+                    payment.getDateCreated(),
+                    payment.getTransactionId());
 
             kafkaTemplate.send("payment-approved-event-topic", event);
             log.info(" Evento de pago aprobado enviado: {}", event);
@@ -590,37 +495,32 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     private String getOrCreateMpCustomer(String email)
-        throws MPApiException, MPException {
+            throws MPApiException, MPException {
         Map<String, Object> filters = new HashMap<>();
         filters.put("email", email);
 
         MPSearchRequest searchRequest = MPSearchRequest.builder()
-            .limit(1)
-            .offset(0)
-            .filters(filters)
-            .build();
+                .limit(1)
+                .offset(0)
+                .filters(filters)
+                .build();
 
         MPResultsResourcesPage<Customer> searchResults = customerClient.search(
-            searchRequest
-        );
+                searchRequest);
 
-        if (
-            searchResults.getResults() != null &&
-            !searchResults.getResults().isEmpty()
-        ) {
+        if (searchResults.getResults() != null &&
+                !searchResults.getResults().isEmpty()) {
             log.info(
-                "Cliente de Mercado Pago encontrado para email: {}",
-                email
-            );
+                    "Cliente de Mercado Pago encontrado para email: {}",
+                    email);
             return searchResults.getResults().get(0).getId();
         } else {
             log.info(
-                "No se encontró cliente de Mercado Pago. Creando uno nuevo para email: {}",
-                email
-            );
+                    "No se encontró cliente de Mercado Pago. Creando uno nuevo para email: {}",
+                    email);
             CustomerRequest customerRequest = CustomerRequest.builder()
-                .email(email)
-                .build();
+                    .email(email)
+                    .build();
             Customer newCustomer = customerClient.create(customerRequest);
             return newCustomer.getId();
         }
@@ -629,20 +529,16 @@ public class PaymentServiceImpl implements PaymentService {
     @Override
     @Transactional
     public void simulatePaymentApproval(
-        String externalReference,
-        String authorizationCode
-    ) {
+            String externalReference,
+            String authorizationCode) {
         log.info(
-            "🔄 Simulando aprobación de pago para referencia: {}",
-            externalReference
-        );
+                " Simulando aprobación de pago para referencia: {}",
+                externalReference);
 
-        Optional<PaymentEntity> paymentOpt =
-            paymentRepository.findByExternalReference(externalReference);
+        Optional<PaymentEntity> paymentOpt = paymentRepository.findByExternalReference(externalReference);
         if (paymentOpt.isEmpty()) {
             throw new RuntimeException(
-                "Pago no encontrado para la referencia: " + externalReference
-            );
+                    "Pago no encontrado para la referencia: " + externalReference);
         }
 
         PaymentEntity payment = paymentOpt.get();
@@ -654,46 +550,40 @@ public class PaymentServiceImpl implements PaymentService {
         paymentRepository.save(payment);
 
         log.info(
-            "Pago simulado como aprobado. Referencia: {}, Authorization Code: {}",
-            externalReference,
-            authorizationCode
-        );
+                "Pago simulado como aprobado. Referencia: {}, Authorization Code: {}",
+                externalReference,
+                authorizationCode);
         sendPaymentApprovedEventFromEntity(payment);
     }
 
     @Override
     public Page<PaymentDetailsResponseDto> getAllPaymentsDetails(
-        Pageable pageable,
-        String status,
-        String paymentMethodId,
-        OffsetDateTime startDate,
-        OffsetDateTime endDate
-    ) {
+            Pageable pageable,
+            String status,
+            String paymentMethodId,
+            OffsetDateTime startDate,
+            OffsetDateTime endDate) {
         log.info(
-            "Buscando pagos con filtros - Status: {}, Método de Pago: {}, Fecha Inicio: {}, Fecha Fin: {}",
-            status,
-            paymentMethodId,
-            startDate,
-            endDate
-        );
+                "Buscando pagos con filtros - Status: {}, Método de Pago: {}, Fecha Inicio: {}, Fecha Fin: {}",
+                status,
+                paymentMethodId,
+                startDate,
+                endDate);
 
         Specification<PaymentEntity> spec = PaymentSpecification.hasStatus(
-            status
-        )
-            .and(PaymentSpecification.hasPaymentMethod(paymentMethodId))
-            .and(PaymentSpecification.isBetweenDates(startDate, endDate));
+                status)
+                .and(PaymentSpecification.hasPaymentMethod(paymentMethodId))
+                .and(PaymentSpecification.isBetweenDates(startDate, endDate));
 
         Page<PaymentEntity> paymentsPage = paymentRepository.findAll(
-            spec,
-            pageable
-        );
+                spec,
+                pageable);
 
         log.info(
-            "Se encontraron {} pagos en la página {} de {}",
-            paymentsPage.getNumberOfElements(),
-            paymentsPage.getNumber(),
-            paymentsPage.getTotalPages()
-        );
+                "Se encontraron {} pagos en la página {} de {}",
+                paymentsPage.getNumberOfElements(),
+                paymentsPage.getNumber(),
+                paymentsPage.getTotalPages());
 
         return paymentsPage.map(paymentMapper::toDto);
     }
@@ -703,71 +593,57 @@ public class PaymentServiceImpl implements PaymentService {
     public DashboardStatisticsResponseDto getDashboardStatistics() {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
-        // Rangos de fecha para el mes actual y el anterior
         OffsetDateTime startOfCurrentMonth = now
-            .withDayOfMonth(1)
-            .withHour(0)
-            .withMinute(0)
-            .withSecond(0)
-            .withNano(0);
+                .withDayOfMonth(1)
+                .withHour(0)
+                .withMinute(0)
+                .withSecond(0)
+                .withNano(0);
         OffsetDateTime endOfCurrentMonth = startOfCurrentMonth
-            .plusMonths(1)
-            .minusNanos(1);
+                .plusMonths(1)
+                .minusNanos(1);
         OffsetDateTime startOfPreviousMonth = startOfCurrentMonth.minusMonths(
-            1
-        );
+                1);
         OffsetDateTime endOfPreviousMonth = startOfCurrentMonth.minusNanos(1);
 
-        //  Ingresos Mensuales
-        BigDecimal currentMonthRevenue =
-            paymentRepository.findTotalRevenueBetween(
+        // Ingresos Mensuales
+        BigDecimal currentMonthRevenue = paymentRepository.findTotalRevenueBetween(
                 startOfCurrentMonth,
-                endOfCurrentMonth
-            );
-        BigDecimal previousMonthRevenue =
-            paymentRepository.findTotalRevenueBetween(
+                endOfCurrentMonth);
+        BigDecimal previousMonthRevenue = paymentRepository.findTotalRevenueBetween(
                 startOfPreviousMonth,
-                endOfPreviousMonth
-            );
+                endOfPreviousMonth);
         StatisticDataDto<BigDecimal> revenueStats = createStatisticData(
-            currentMonthRevenue,
-            previousMonthRevenue
-        );
+                currentMonthRevenue,
+                previousMonthRevenue);
 
-        //  Nuevos Miembros
+        // Nuevos Miembros
         long currentMonthMembers = paymentRepository.countNewMembersBetween(
-            startOfCurrentMonth,
-            endOfCurrentMonth
-        );
+                startOfCurrentMonth,
+                endOfCurrentMonth);
         long previousMonthMembers = paymentRepository.countNewMembersBetween(
-            startOfPreviousMonth,
-            endOfPreviousMonth
-        );
+                startOfPreviousMonth,
+                endOfPreviousMonth);
         StatisticDataDto<Long> memberStats = createStatisticData(
-            currentMonthMembers,
-            previousMonthMembers
-        );
+                currentMonthMembers,
+                previousMonthMembers);
 
-        //  Estadísticas Adicionales
-        long totalApprovedPayments =
-            paymentRepository.countTotalApprovedPayments();
+        // Estadísticas Adicionales
+        long totalApprovedPayments = paymentRepository.countTotalApprovedPayments();
         List<PlanDistributionDto> topPlans = paymentRepository.findTopPlans();
-        List<StatusDistributionDto> paymentStatusDistribution =
-            paymentRepository.findPaymentStatusDistribution();
+        List<StatusDistributionDto> paymentStatusDistribution = paymentRepository.findPaymentStatusDistribution();
 
         return new DashboardStatisticsResponseDto(
-            revenueStats,
-            memberStats,
-            totalApprovedPayments,
-            topPlans,
-            paymentStatusDistribution
-        );
+                revenueStats,
+                memberStats,
+                totalApprovedPayments,
+                topPlans,
+                paymentStatusDistribution);
     }
 
     private <T extends Number> StatisticDataDto<T> createStatisticData(
-        T currentValue,
-        T previousValue
-    ) {
+            T currentValue,
+            T previousValue) {
         double current = currentValue.doubleValue();
         double previous = previousValue.doubleValue();
         double percentageChange = calculatePercentageChange(current, previous);
@@ -782,63 +658,59 @@ public class PaymentServiceImpl implements PaymentService {
         }
         double change = ((current - previous) / previous) * 100.0;
         return BigDecimal.valueOf(change)
-            .setScale(2, RoundingMode.HALF_UP)
-            .doubleValue();
+                .setScale(2, RoundingMode.HALF_UP)
+                .doubleValue();
     }
 
     private String getTrend(double percentageChange) {
-        if (percentageChange > 0) return "up";
-        if (percentageChange < 0) return "down";
+        if (percentageChange > 0)
+            return "up";
+        if (percentageChange < 0)
+            return "down";
         return "neutral";
     }
 
     private BigDecimal calculateProratedUpgradeCost(
-        PaymentEntity currentPayment,
-        PlanEntity newPlan
-    ) {
+            PaymentEntity currentPayment,
+            PlanEntity newPlan) {
         PlanEntity currentPlan = currentPayment.getPlan();
-        OffsetDateTime startDate = currentPayment.getDateApproved(); //cuando en realidad empezo la sub
+        OffsetDateTime startDate = currentPayment.getDateApproved();
         if (startDate == null) {
             startDate = currentPayment.getDateCreated();
         }
         OffsetDateTime now = OffsetDateTime.now();
 
-        long cycleDurationInDays = currentPlan.getDurationMonths() * 30L; //  30 días por mes
+        long cycleDurationInDays = currentPlan.getDurationMonths() * 30L;
         long daysElapsed = ChronoUnit.DAYS.between(startDate, now);
         long daysRemaining = cycleDurationInDays - daysElapsed;
 
         log.info(
-            "Cálculo de prorrateo: Días en ciclo: {}, Días transcurridos: {}, Días restantes: {}",
-            cycleDurationInDays,
-            daysElapsed,
-            daysRemaining
-        );
+                "Cálculo de prorrateo: Días en ciclo: {}, Días transcurridos: {}, Días restantes: {}",
+                cycleDurationInDays,
+                daysElapsed,
+                daysRemaining);
 
         if (daysRemaining <= 0) {
             return newPlan.getPrice();
         }
 
         BigDecimal dailyCostCurrent = currentPlan
-            .getPrice()
-            .divide(
-                BigDecimal.valueOf(cycleDurationInDays),
-                10,
-                RoundingMode.HALF_UP
-            );
+                .getPrice()
+                .divide(
+                        BigDecimal.valueOf(cycleDurationInDays),
+                        10,
+                        RoundingMode.HALF_UP);
         BigDecimal dailyCostNew = newPlan
-            .getPrice()
-            .divide(
-                BigDecimal.valueOf(cycleDurationInDays),
-                10,
-                RoundingMode.HALF_UP
-            );
+                .getPrice()
+                .divide(
+                        BigDecimal.valueOf(cycleDurationInDays),
+                        10,
+                        RoundingMode.HALF_UP);
 
         BigDecimal unusedCredit = dailyCostCurrent.multiply(
-            BigDecimal.valueOf(daysRemaining)
-        );
+                BigDecimal.valueOf(daysRemaining));
         BigDecimal remainingCostNewPlan = dailyCostNew.multiply(
-            BigDecimal.valueOf(daysRemaining)
-        );
+                BigDecimal.valueOf(daysRemaining));
 
         BigDecimal proratedCost = remainingCostNewPlan.subtract(unusedCredit);
         return proratedCost.setScale(2, RoundingMode.HALF_UP);
@@ -847,135 +719,107 @@ public class PaymentServiceImpl implements PaymentService {
     private void cancelOldSubscriptionAndUpdateState(PaymentEntity oldPayment) {
         try {
             log.info(
-                "🔴 Cancelando pago anterior ID: {} (Payment ID: {})",
-                oldPayment.getId(),
-                oldPayment.getPaymentId()
-            );
+                    "🔴 Cancelando pago anterior ID: {} (Payment ID: {})",
+                    oldPayment.getId(),
+                    oldPayment.getPaymentId());
 
-            // ✅ Actualizar el estado del pago anterior en la BD
             oldPayment.setStatus("cancelled");
             oldPayment.setStatusDetail("Cancelled due to plan upgrade");
             paymentRepository.save(oldPayment);
 
             log.info(
-                "✅ Pago anterior actualizado a 'cancelled' en la base de datos"
-            );
+                    " Pago anterior actualizado a 'cancelled' en la base de datos");
 
-            // 🔄 Si tenía subscription ID, cancelarla en Mercado Pago
-            if (
-                oldPayment.getMercadoPagoSubscriptionId() != null &&
-                !oldPayment.getMercadoPagoSubscriptionId().isEmpty()
-            ) {
+            if (oldPayment.getMercadoPagoSubscriptionId() != null &&
+                    !oldPayment.getMercadoPagoSubscriptionId().isEmpty()) {
                 log.info(
-                    "📞 Cancelando suscripción en Mercado Pago: {}",
-                    oldPayment.getMercadoPagoSubscriptionId()
-                );
+                        "📞 Cancelando suscripción en Mercado Pago: {}",
+                        oldPayment.getMercadoPagoSubscriptionId());
 
                 try {
                     mercadoPagoApiClient.cancelSubscription(
-                        oldPayment.getMercadoPagoSubscriptionId(),
-                        new SubscriptionCancelRequest("cancelled")
-                    );
+                            oldPayment.getMercadoPagoSubscriptionId(),
+                            new SubscriptionCancelRequest("cancelled"));
                     log.info("✅ Suscripción cancelada en Mercado Pago");
                 } catch (Exception mpEx) {
                     log.error(
-                        "❌ Error cancelando suscripción en MP (no crítico): {}",
-                        mpEx.getMessage()
-                    );
-                    // No lanzamos la excepción porque ya actualizamos la BD
+                            " Error cancelando suscripción en MP (no crítico): {}",
+                            mpEx.getMessage());
                 }
             }
 
-            // 🔄 Intentar reembolso si es necesario (opcional)
             if (oldPayment.getPaymentId() != null) {
                 try {
                     log.info(
-                        "💰 Intentando reembolso del pago ID: {}",
-                        oldPayment.getPaymentId()
-                    );
+                            "Intentando reembolso del pago ID: {}",
+                            oldPayment.getPaymentId());
                     mercadoPagoApiClient.createRefund(
-                        oldPayment.getPaymentId()
-                    );
-                    log.info("✅ Reembolso procesado correctamente");
+                            oldPayment.getPaymentId());
+                    log.info(" Reembolso procesado correctamente");
 
                     oldPayment.setStatus("refunded");
                     oldPayment.setStatusDetail("Refunded due to plan upgrade");
                     paymentRepository.save(oldPayment);
                 } catch (Exception refundEx) {
                     log.warn(
-                        "⚠️ No se pudo procesar el reembolso (puede que no sea elegible): {}",
-                        refundEx.getMessage()
-                    );
-                    // Mantenemos el estado como "cancelled"
+                            "No se pudo procesar el reembolso (puede que no sea elegible): {}",
+                            refundEx.getMessage());
                 }
             }
         } catch (Exception e) {
             log.error(
-                "❌ Error crítico cancelando pago anterior: {}",
-                e.getMessage(),
-                e
-            );
+                    " Error crítico cancelando pago anterior: {}",
+                    e.getMessage(),
+                    e);
             throw new RuntimeException(
-                "Error al cancelar el pago anterior: " + e.getMessage()
-            );
+                    "Error al cancelar el pago anterior: " + e.getMessage());
         }
     }
 
     private PaymentEntity findActivePaymentForUser(UUID userId) {
         log.debug("Buscando pago activo para el usuario: {}", userId);
         return paymentRepository
-            .findFirstByUserIdAndStatusOrderByDateApprovedDesc(
-                userId,
-                "approved"
-            )
-            .orElseThrow(() ->
-                new EntityNotFoundException(
-                    "No se encontró un plan activo para el usuario " + userId
-                )
-            );
+                .findFirstByUserIdAndStatusOrderByDateApprovedDesc(
+                        userId,
+                        "approved")
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "No se encontró un plan activo para el usuario " + userId));
     }
 
     private PlanEntity findPlanById(UUID planId) {
         log.debug("Buscando plan con ID: {}", planId);
         return planRepository
-            .findById(planId)
-            .orElseThrow(() ->
-                new EntityNotFoundException(
-                    "El nuevo plan con ID " + planId + " no existe."
-                )
-            );
+                .findById(planId)
+                .orElseThrow(() -> new EntityNotFoundException(
+                        "El nuevo plan con ID " + planId + " no existe."));
     }
 
     private DirectPaymentRequest createUpgradePaymentRequest(
-        PlanUpgradeRequestDto upgradeRequest,
-        BigDecimal amountToCharge,
-        PlanEntity newPlan,
-        PaymentEntity currentPayment
-    ) {
-        String externalReference =
-            "UPGRADE-" +
-            upgradeRequest.userId() +
-            "-" +
-            System.currentTimeMillis();
+            PlanUpgradeRequestDto upgradeRequest,
+            BigDecimal amountToCharge,
+            PlanEntity newPlan,
+            PaymentEntity currentPayment) {
+        String externalReference = "UPGRADE-" +
+                upgradeRequest.userId() +
+                "-" +
+                System.currentTimeMillis();
         log.debug(
-            "Creando DirectPaymentRequest con referencia externa: {}",
-            externalReference
-        );
+                "Creando DirectPaymentRequest con referencia externa: {}",
+                externalReference);
 
         return new DirectPaymentRequest(
-            externalReference,
-            upgradeRequest.userId(),
-            newPlan.getId(),
-            amountToCharge,
-            currentPayment.getPayerEmail(),
-            currentPayment.getPayerFirstName(),
-            currentPayment.getPayerLastName(),
-            "Upgrade al plan " + newPlan.getName(),
-            upgradeRequest.token(),
-            upgradeRequest.installments(),
-            upgradeRequest.paymentMethodId(),
-            currentPayment.getPayerIdentificationType(),
-            currentPayment.getPayerIdentificationNumber()
-        );
+                externalReference,
+                upgradeRequest.userId(),
+                newPlan.getId(),
+                amountToCharge,
+                currentPayment.getPayerEmail(),
+                currentPayment.getPayerFirstName(),
+                currentPayment.getPayerLastName(),
+                "Upgrade al plan " + newPlan.getName(),
+                upgradeRequest.token(),
+                upgradeRequest.installments(),
+                upgradeRequest.paymentMethodId(),
+                currentPayment.getPayerIdentificationType(),
+                currentPayment.getPayerIdentificationNumber());
     }
 }

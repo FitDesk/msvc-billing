@@ -80,10 +80,8 @@ public class PaymentMethodServiceImpl implements PaymentMethodService {
                 );
             }
 
-            // 1. Obtener o crear cliente en Mercado Pago
             String customerId = getOrCreateMpCustomer(request.payerEmail());
 
-            // 2. Guardar la tarjeta en el cliente de Mercado Pago para obtener un ID permanente
             CustomerCardCreateRequest cardCreateRequest =
                     CustomerCardCreateRequest.builder()
                             .token(request.cardToken())
@@ -120,7 +118,7 @@ public class PaymentMethodServiceImpl implements PaymentMethodService {
 
             PaymentMethodEntity entity = PaymentMethodEntity.builder()
                     .userId(userId)
-                    .cardToken(persistentCardId) // Guardar el ID permanente de la tarjeta
+                    .cardToken(persistentCardId) 
                     .lastFourDigits(savedMpCard.getLastFourDigits())
                     .cardHolderName(savedMpCard.getCardholder().getName())
                     .cardBrand(savedMpCard.getPaymentMethod().getId().toUpperCase())
@@ -215,7 +213,6 @@ public class PaymentMethodServiceImpl implements PaymentMethodService {
         }
 
         if (request.setAsDefault() != null && request.setAsDefault()) {
-            // Desmarcar otras tarjetas como default
             paymentMethodRepository.unsetDefaultForUser(userId, cardId);
             card.setIsDefault(true);
         }
@@ -276,7 +273,6 @@ public class PaymentMethodServiceImpl implements PaymentMethodService {
                         new ResourceNotFoundException("Plan no encontrado")
                 );
 
-        // Crear el pago con el token guardado
         String externalReference =
                 "SAVED_CARD_" + request.userId() + "_" + System.currentTimeMillis();
 
